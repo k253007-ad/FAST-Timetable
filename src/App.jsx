@@ -4,7 +4,6 @@ import ClassSelector from './components/ClassSelector.jsx';
 import { fetchData } from './services/dataService.js';
 import html2canvas from 'html2canvas';
 import './index.css'; // Import the global styles
-import './print.css'; // Import print specific styles
 
 function App() {
   const [timetableData, setTimetableData] = useState(null);
@@ -52,9 +51,6 @@ function App() {
     return () => clearInterval(intervalId); // Cleanup interval on component unmount
   }, []);
 
-  const handlePrint = () => {
-    window.print();
-  };
    const handleRefresh = () => {
     getData();
   };
@@ -109,7 +105,6 @@ function App() {
     <div className="app-container">
       <div className="app-header no-print">
         <h2>Timetable Generator</h2>
-        <button onClick={handlePrint} className="print-button">Print</button>
         <button onClick={handleRefresh} className="download-button">Refresh</button>
         <button onClick={() => handleDownloadImage('png')} className="download-button">Download PNG</button>
         <button onClick={() => handleDownloadImage('jpg')} className="download-button">Download JPG</button>

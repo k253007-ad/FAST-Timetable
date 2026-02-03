@@ -34,7 +34,6 @@ body {
   flex-grow: 1; /* Allows title to take available space */
 }
 
-.print-button,
 .download-button {
   background-color: #4CAF50; /* Green */
   color: white;
@@ -47,7 +46,6 @@ body {
   transition: background-color 0.3s ease;
 }
 
-.print-button:hover,
 .download-button:hover {
   background-color: #45a049;
 }
