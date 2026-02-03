@@ -16,7 +16,7 @@ const TimetableGrid = ({ data, selectedClasses }) => {
   }
 
   const allDays = [...new Set(data.timetable.map(item => item.Day))];
-  const dayOrder = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+  const dayOrder = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
   const days = allDays.sort((a, b) => dayOrder.indexOf(a) - dayOrder.indexOf(b));
 
   const allTimes = [...new Set(data.timetable.map(item => item.Time))];

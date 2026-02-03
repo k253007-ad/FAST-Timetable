@@ -96,6 +96,9 @@ export const fetchData = async () => {
 
     await Promise.all(sheetPromises);
     
+    // Filter out Saturday classes
+    allTimetableData = allTimetableData.filter(item => item.Day !== 'Saturday');
+
     // Add the missing time slot as requested by the user
     allTimeSlots.add("03:00 - 03:45");
 
