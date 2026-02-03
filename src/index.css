@@ -17,37 +17,40 @@ body {
 
 /* App Header */
 .app-header {
-  background-color: #3f51b5; /* Primary color */
+  background-image: linear-gradient(to right, #3f51b5, #4e79a7);
   color: white;
-  padding: 16px;
-  box-shadow: 0px 2px 4px -1px rgba(0,0,0,0.2), 0px 4px 5px 0px rgba(0,0,0,0.14), 0px 1px 10px 0px rgba(0,0,0,0.12);
+  padding: 20px;
+  box-shadow: 0px 3px 6px -1px rgba(0,0,0,0.2), 0px 5px 8px 0px rgba(0,0,0,0.14), 0px 1px 12px 0px rgba(0,0,0,0.12);
   display: flex;
   align-items: center;
 }
 
 .app-header h2 {
   margin: 0;
-  font-size: 1.25rem; /* h6 equivalent */
-  font-weight: 500;
-  line-height: 1.6;
-  letter-spacing: 0.0075em;
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
   flex-grow: 1; /* Allows title to take available space */
 }
 
 .download-button {
-  background-color: #4CAF50; /* Green */
+  background-color: #28a745; /* A more vibrant green */
   color: white;
-  padding: 8px 16px;
+  padding: 10px 20px;
   border: none;
-  border-radius: 4px;
+  border-radius: 5px;
   cursor: pointer;
-  font-size: 0.875rem;
-  margin-left: 8px;
-  transition: background-color 0.3s ease;
+  font-size: 0.9rem;
+  font-weight: 500;
+  margin-left: 10px;
+  transition: all 0.2s ease-in-out;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
 }
 
 .download-button:hover {
-  background-color: #45a049;
+  background-color: #218838;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 8px rgba(0,0,0,0.15);
 }
 
 /* App Content Wrapper */
@@ -154,18 +157,19 @@ body {
 }
 
 .checkbox-label input[type="checkbox"] {
-  margin-right: 8px;
+  margin-right: 12px;
   -webkit-appearance: none;
   -moz-appearance: none;
   appearance: none;
-  width: 18px;
-  height: 18px;
-  border: 2px solid rgba(0, 0, 0, 0.54);
-  border-radius: 2px;
+  width: 20px;
+  height: 20px;
+  border: 2px solid #ccc;
+  border-radius: 4px;
   position: relative;
   cursor: pointer;
   outline: none;
   flex-shrink: 0;
+  transition: all 0.2s ease-in-out;
 }
 
 .checkbox-label input[type="checkbox"]:checked {
@@ -180,7 +184,8 @@ body {
   left: 50%;
   transform: translate(-50%, -50%);
   color: white;
-  font-size: 14px;
+  font-size: 16px;
+  font-weight: bold;
 }
 
 /* Timetable Grid - Fixed at Bottom */
@@ -424,6 +429,19 @@ body {
 
   }
 
+}
+
+@media (max-width: 480px) {
+  .app-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .download-button {
+    width: 100%;
+    margin-left: 0;
+    margin-top: 8px;
+  }
 }
 
 
