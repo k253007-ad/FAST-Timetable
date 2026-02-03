@@ -1,8 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 
 const ClassSelector = ({ data, selectedClasses, setSelectedClasses }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [showDropdown, setShowDropdown] = useState(false); // For dropdown behavior
+  const containerRef = useRef(null);
 
   if (!data || !data.timetable) {
     return null;
@@ -30,9 +31,11 @@ const ClassSelector = ({ data, selectedClasses, setSelectedClasses }) => {
     setShowDropdown(true);
   };
 
-  const handleBlur = () => {
-    // Delay hiding to allow click events on checkboxes to register
-    setTimeout(() => setShowDropdown(false), 100);
+  const handleBlur = (e) => {
+    // Check if the new focused element is outside the component
+    if (containerRef.current && !containerRef.current.contains(e.relatedTarget)) {
+      setShowDropdown(false);
+    }
   };
 
   const filteredClasses = uniqueClasses.filter(className =>
@@ -40,7 +43,11 @@ const ClassSelector = ({ data, selectedClasses, setSelectedClasses }) => {
   );
 
   return (
-    <div className="class-selector-container">
+    <div 
+      className="class-selector-container" 
+      ref={containerRef} 
+      onBlur={handleBlur} // Move blur handler to the container
+    >
       <h3>Select Classes</h3>
       <input 
         type="text" 
@@ -48,7 +55,7 @@ const ClassSelector = ({ data, selectedClasses, setSelectedClasses }) => {
         value={searchQuery}
         onChange={handleSearchChange}
         onFocus={handleFocus}
-        onBlur={handleBlur}
+        // onBlur is now on the container
         className="class-search-input"
       />
       {showDropdown && (
