@@ -1,6 +1,8 @@
 // This service is responsible for fetching and parsing data from the Google Sheets source.
 
-const API_META_URL = '/api/data';
+const API_META_URL = import.meta.env.PROD
+  ? 'https://server-timetable2.vercel.app/data'
+  : '/api/data';
 
 /**
  * Parses the multi-line string from a cell in the Google Sheet.
