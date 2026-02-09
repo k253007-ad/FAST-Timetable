@@ -39,7 +39,14 @@ export const fetchData = async () => {
     });
 
     if (!metaResponse.ok) {
-      throw new Error(`Failed to fetch metadata: ${metaResponse.statusText}`);
+      const contentType = metaResponse.headers.get('content-type');
+      if (contentType && contentType.indexOf('application/json') !== -1) {
+        const errorData = await metaResponse.json();
+        throw new Error(`Failed to fetch metadata: ${metaResponse.statusText} - ${JSON.stringify(errorData)}`);
+      } else {
+        const errorText = await metaResponse.text();
+        throw new Error(`Failed to fetch metadata: ${metaResponse.statusText} - ${errorText}`);
+      }
     }
     const metaJson = await metaResponse.json();
 
