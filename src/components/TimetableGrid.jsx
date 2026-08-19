@@ -1,130 +1,13 @@
 import { Fragment, useMemo } from 'react';
 import { splitClassValue, withAlpha } from '../utils/courseColors.js';
+import { buildSchedule, cleanRoom, formatSlot, slotMinuteRange } from '../utils/schedule.js';
 import { IconAlert, IconCalendar } from './Icons.jsx';
 
-const DAY_ORDER = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
-
-// Sheet times have no AM/PM marker; anything before 7 is an afternoon class.
-const toMinutes = (timeStr) => {
-  if (!timeStr || !timeStr.includes(':')) return 0;
-  let [hours, minutes] = timeStr.split(':').map(Number);
-  if (hours < 7) hours += 12;
-  return hours * 60 + (minutes || 0);
-};
-
-// Slot strings in the sheet are inconsistent ("09:50:-10:40", "1:30-2:20");
-// extract the two clock times for tidy display while keeping the raw string as key.
-const formatSlot = (slot) => {
-  const times = slot.match(/\d{1,2}:\d{2}/g) || [];
-  return { start: times[0] || slot, end: times[1] || '' };
-};
-
-const cleanRoom = (room) =>
-  (room || 'N/A')
-    .replace(/Academic Block/gi, 'AB')
-    .replace(/\s*\(\d+\)\s*$/, '') // strip trailing seating capacity, e.g. "(50)"
-    .trim();
-
-const sameClass = (a, b) =>
-  a.Course === b.Course && a.Section === b.Section && a.Instructor === b.Instructor;
-
 const TimetableGrid = ({ data, selectedClasses, courseColors, isDark }) => {
-  const { days, timeSlots, processedSchedule, sessionCount, courseCount, clashCount } =
-    useMemo(() => {
-      if (!data?.timetable) {
-        return {
-          days: [],
-          timeSlots: [],
-          processedSchedule: {},
-          sessionCount: 0,
-          courseCount: 0,
-          clashCount: 0,
-        };
-      }
-
-      const days = [...new Set(data.timetable.map((item) => item.Day))].sort(
-        (a, b) => DAY_ORDER.indexOf(a) - DAY_ORDER.indexOf(b)
-      );
-
-      const timeSlots = [...new Set(data.timetable.map((item) => item.Time))].sort(
-        (a, b) => toMinutes(a.split('-')[0]) - toMinutes(b.split('-')[0])
-      );
-
-      const filteredData = data.timetable.filter((item) =>
-        selectedClasses.includes(`${item.Course} - ${item.Section}`)
-      );
-
-      const schedule = {};
-      days.forEach((day) => {
-        schedule[day] = {};
-        timeSlots.forEach((slot) => {
-          schedule[day][slot] = [];
-        });
-      });
-      filteredData.forEach((item) => {
-        if (schedule[item.Day]?.[item.Time]) {
-          schedule[item.Day][item.Time].push(item);
-        }
-      });
-
-      // Merge consecutive identical sessions into one wider cell.
-      // Labs always occupy three slots; any different class sitting inside a
-      // lab's window is folded into the same cell so it stays visible (clash).
-      const processedSchedule = {};
-      let clashCount = 0;
-
-      days.forEach((day) => {
-        processedSchedule[day] = [];
-        let i = 0;
-        while (i < timeSlots.length) {
-          const slot = timeSlots[i];
-          const classesInSlot = schedule[day][slot];
-
-          if (classesInSlot.length > 0) {
-            const classItem = classesInSlot[0];
-            let colSpan = 1;
-            let cellClasses = classesInSlot;
-
-            if (classItem.Course.toLowerCase().includes('lab')) {
-              colSpan = Math.min(3, timeSlots.length - i);
-              const merged = [...classesInSlot];
-              for (let k = i + 1; k < i + colSpan; k++) {
-                schedule[day][timeSlots[k]].forEach((c) => {
-                  if (!merged.some((m) => sameClass(m, c))) merged.push(c);
-                });
-              }
-              cellClasses = merged;
-            } else {
-              for (let j = i + 1; j < timeSlots.length; j++) {
-                const nextClasses = schedule[day][timeSlots[j]];
-                if (nextClasses.length > 0 && sameClass(nextClasses[0], classItem)) {
-                  colSpan++;
-                } else {
-                  break;
-                }
-              }
-              if (i + colSpan > timeSlots.length) colSpan = timeSlots.length - i;
-            }
-
-            if (cellClasses.length > 1) clashCount++;
-            processedSchedule[day].push({ slot, colSpan, classes: cellClasses, isEmpty: false });
-            i += colSpan;
-          } else {
-            processedSchedule[day].push({ slot, colSpan: 1, classes: [], isEmpty: true });
-            i++;
-          }
-        }
-      });
-
-      return {
-        days,
-        timeSlots,
-        processedSchedule,
-        sessionCount: filteredData.length,
-        courseCount: new Set(filteredData.map((item) => item.Course)).size,
-        clashCount,
-      };
-    }, [data, selectedClasses]);
+  const { days, timeSlots, processedSchedule, sessionCount, courseCount, clashCount } = useMemo(
+    () => buildSchedule(data, selectedClasses),
+    [data, selectedClasses]
+  );
 
   if (!data?.timetable) return null;
 
@@ -162,7 +45,40 @@ const TimetableGrid = ({ data, selectedClasses, courseColors, isDark }) => {
     );
   }
 
-  const today = new Date().toLocaleDateString('en-US', { weekday: 'long' });
+  const now = new Date();
+  const today = now.toLocaleDateString('en-US', { weekday: 'long' });
+  const nowMinutes = now.getHours() * 60 + now.getMinutes();
+
+  // Find the live-right-now cell and the next upcoming one, searching
+  // forward from today (wrapping to Monday) across the days actually shown.
+  const todayIndex = days.indexOf(today);
+  let currentCellKey = null;
+  let nextCellKey = null;
+
+  if (todayIndex !== -1) {
+    const currentCell = processedSchedule[today]?.find((cell) => {
+      if (cell.isEmpty) return false;
+      const { startMin, endMin } = slotMinuteRange(cell.slot);
+      return nowMinutes >= startMin && nowMinutes < endMin;
+    });
+    if (currentCell) currentCellKey = `${today}-${currentCell.slot}`;
+  }
+
+  if (days.length > 0) {
+    const startIndex = todayIndex !== -1 ? todayIndex : 0;
+    for (let offset = 0; offset < days.length && !nextCellKey; offset++) {
+      const day = days[(startIndex + offset) % days.length];
+      const isToday = offset === 0 && todayIndex !== -1;
+      const upcoming = processedSchedule[day]?.find((cell) => {
+        if (cell.isEmpty) return false;
+        if (!isToday) return true;
+        const { startMin } = slotMinuteRange(cell.slot);
+        return startMin > nowMinutes;
+      });
+      if (upcoming) nextCellKey = `${day}-${upcoming.slot}`;
+    }
+  }
+
   const legendCourses = Object.keys(courseColors).filter((course) =>
     selectedClasses.some((v) => splitClassValue(v).course === course)
   );
@@ -236,8 +152,11 @@ const TimetableGrid = ({ data, selectedClasses, courseColors, isDark }) => {
                   <span className="tt-dayname">{day}</span>
                   {isToday && <span className="today-pill">Today</span>}
                 </div>
-                {processedSchedule[day].map((cell) =>
-                  cell.isEmpty ? (
+                {processedSchedule[day].map((cell) => {
+                  const cellKey = `${day}-${cell.slot}`;
+                  const isNow = cellKey === currentCellKey;
+                  const isNext = !isNow && cellKey === nextCellKey;
+                  return cell.isEmpty ? (
                     <div
                       key={cell.slot}
                       className={`tt-cell tt-body is-empty${rowMod}`}
@@ -246,9 +165,13 @@ const TimetableGrid = ({ data, selectedClasses, courseColors, isDark }) => {
                   ) : (
                     <div
                       key={cell.slot}
-                      className={`tt-cell tt-body${cell.classes.length > 1 ? ' is-clash' : ''}${rowMod}`}
+                      className={`tt-cell tt-body${cell.classes.length > 1 ? ' is-clash' : ''}${rowMod}${
+                        isNow ? ' is-now' : ''
+                      }${isNext ? ' is-next' : ''}`}
                       style={{ gridColumn: `span ${cell.colSpan}` }}
                     >
+                      {isNow && <span className="now-badge">Now</span>}
+                      {isNext && <span className="next-badge">Next</span>}
                       {cell.classes.map((classItem, index) => (
                         <div
                           key={index}
@@ -264,8 +187,8 @@ const TimetableGrid = ({ data, selectedClasses, courseColors, isDark }) => {
                         </div>
                       ))}
                     </div>
-                  )
-                )}
+                  );
+                })}
               </Fragment>
             );
           })}

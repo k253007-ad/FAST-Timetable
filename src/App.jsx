@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import html2canvas from 'html2canvas';
 import TimetableGrid from './components/TimetableGrid.jsx';
 import ClassSelector from './components/ClassSelector.jsx';
+import NowNext from './components/NowNext.jsx';
 import { fetchData } from './services/dataService.js';
 import { assignCourseColors } from './utils/courseColors.js';
 import {
@@ -28,9 +29,26 @@ const getInitialTheme = () => {
   return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 };
 
-const getSavedClasses = () => {
+const PROFILE_COUNT = 5;
+
+// Profile 1 keeps the legacy "selectedClasses" key so existing users' saved
+// selections keep landing in the right place; profiles 2-5 are additive.
+const getProfileStorageKey = (profile) =>
+  profile === 1 ? 'selectedClasses' : `selectedClasses_${profile}`;
+
+const getSavedActiveProfile = () => {
   try {
-    const saved = localStorage.getItem('selectedClasses');
+    const saved = Number(localStorage.getItem('activeProfile'));
+    if (Number.isInteger(saved) && saved >= 1 && saved <= PROFILE_COUNT) return saved;
+  } catch {
+    /* storage unavailable */
+  }
+  return 1;
+};
+
+const getSavedClasses = (profile) => {
+  try {
+    const saved = localStorage.getItem(getProfileStorageKey(profile));
     return saved ? JSON.parse(saved) : [];
   } catch {
     return [];
@@ -55,7 +73,10 @@ function App() {
   const [exporting, setExporting] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [theme, setTheme] = useState(getInitialTheme);
-  const [selectedClasses, setSelectedClasses] = useState(getSavedClasses);
+  const [activeProfile, setActiveProfile] = useState(getSavedActiveProfile);
+  const [selectedClasses, setSelectedClasses] = useState(() =>
+    getSavedClasses(getSavedActiveProfile())
+  );
 
   const captureRef = useRef(null);
   const exportMenuRef = useRef(null);
@@ -65,14 +86,28 @@ function App() {
     hasDataRef.current = timetableData !== null;
   }, [timetableData]);
 
-  // Persist selection (legacy key + format kept for existing users).
+  // Persist selection under the active profile's slot (legacy key + format
+  // kept for profile 1, so existing users' saved selections keep working).
   useEffect(() => {
     try {
-      localStorage.setItem('selectedClasses', JSON.stringify(selectedClasses));
+      localStorage.setItem(getProfileStorageKey(activeProfile), JSON.stringify(selectedClasses));
     } catch {
       /* storage unavailable */
     }
-  }, [selectedClasses]);
+  }, [selectedClasses, activeProfile]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('activeProfile', String(activeProfile));
+    } catch {
+      /* storage unavailable */
+    }
+  }, [activeProfile]);
+
+  const switchProfile = useCallback((profile) => {
+    setActiveProfile(profile);
+    setSelectedClasses(getSavedClasses(profile));
+  }, []);
 
   // Apply + persist theme.
   useEffect(() => {
@@ -319,11 +354,17 @@ function App() {
             )}
 
             <ClassSelector
+              data={timetableData}
               allClasses={allClasses}
               selectedClasses={selectedClasses}
               setSelectedClasses={setSelectedClasses}
               courseColors={courseColors}
+              activeProfile={activeProfile}
+              profileCount={PROFILE_COUNT}
+              onSwitchProfile={switchProfile}
             />
+
+            <NowNext data={timetableData} selectedClasses={selectedClasses} />
 
             <div ref={captureRef} data-capture className="capture-area">
               <TimetableGrid
