@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { buildSchedule, cleanRoom, formatSlot, slotMinuteRange } from '../utils/schedule.js';
+import { buildSchedule, cleanRoom } from '../utils/schedule.js';
 
 /**
  * "Now" / "Next" status card shown between the class selector and the grid.
@@ -21,27 +21,31 @@ const NowNext = ({ data, selectedClasses }) => {
 
   const todaySessions = (processedSchedule[today] || []).filter((cell) => !cell.isEmpty);
 
-  const currentSession = todaySessions.find((cell) => {
-    const { startMin, endMin } = slotMinuteRange(cell.slot);
-    return nowMinutes >= startMin && nowMinutes < endMin;
-  });
+  const currentSession = todaySessions.find(
+    (cell) => nowMinutes >= cell.startMin && nowMinutes < cell.endMin
+  );
 
-  const nextSession = todaySessions.find((cell) => {
-    const { startMin } = slotMinuteRange(cell.slot);
-    return startMin > nowMinutes;
-  });
+  const nextSession = todaySessions.find((cell) => cell.startMin > nowMinutes);
 
-  const lastSession = todaySessions[todaySessions.length - 1];
-  const dayIsOver = lastSession ? nowMinutes >= slotMinuteRange(lastSession.slot).endMin : false;
+  const emptyReason = todaySessions.length === 0 ? 'No classes today' : 'No further classes';
 
-  const currentEmptyReason =
-    todaySessions.length === 0 ? 'No classes today' : dayIsOver ? 'No further classes' : 'No class right now';
-  const nextEmptyReason = todaySessions.length === 0 ? 'No classes today' : 'No further classes';
+  const formatCountdown = (mins) => {
+    if (mins <= 0) return 'starting now';
+    const h = Math.floor(mins / 60);
+    const m = mins % 60;
+    if (h > 0) return `${h}h ${m}m`;
+    return `${m}m`;
+  };
 
   const sessionDetails = (cell) => {
     const item = cell.classes[0];
-    const { start, end } = formatSlot(cell.slot);
-    return { course: item.Course, room: cleanRoom(item.Room), instructor: item.Instructor, start, end };
+    return {
+      course: item.Course,
+      room: cleanRoom(item.Room),
+      instructor: item.Instructor,
+      start: cell.startLabel,
+      end: cell.endLabel,
+    };
   };
 
   const renderCol = (label, badgeClass, session, emptyReason) => (
@@ -66,11 +70,39 @@ const NowNext = ({ data, selectedClasses }) => {
     </div>
   );
 
+  const renderNowCol = () => {
+    if (currentSession) {
+      const { course, room, instructor, start, end } = sessionDetails(currentSession);
+      return (
+        <div className="nownext-body">
+          <span className="nownext-course">{course}</span>
+          <span className="nownext-meta">
+            {start} – {end} · {room}
+          </span>
+          <span className="nownext-meta">{instructor}</span>
+        </div>
+      );
+    }
+    if (nextSession) {
+      const minutesUntilNext = Math.max(0, nextSession.startMin - nowMinutes);
+      return (
+        <div className="nownext-body">
+          <span className="nownext-empty">Next class in</span>
+          <span className="nownext-countdown">{formatCountdown(minutesUntilNext)}</span>
+        </div>
+      );
+    }
+    return <div className="nownext-empty">{emptyReason}</div>;
+  };
+
   return (
     <section className="card nownext-card no-print" aria-label="Today's class status">
-      {renderCol('Now', 'now', currentSession, currentEmptyReason)}
+      <div className="nownext-col">
+        <span className="nownext-label now">Now</span>
+        {renderNowCol()}
+      </div>
       <div className="nownext-divider" />
-      {renderCol('Next', 'next', nextSession, nextEmptyReason)}
+      {renderCol('Next', 'next', nextSession, emptyReason)}
     </section>
   );
 };

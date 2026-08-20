@@ -118,7 +118,20 @@ export const buildSchedule = (data, selectedClasses) => {
         }
 
         if (cellClasses.length > 1) clashCount++;
-        processedSchedule[day].push({ slot, colSpan, classes: cellClasses, isEmpty: false });
+        const startLabel = formatSlot(slot).start;
+        const endLabel = formatSlot(timeSlots[i + colSpan - 1]).end;
+        const startMin = toMinutes(startLabel);
+        const endMin = toMinutes(endLabel);
+        processedSchedule[day].push({
+          slot,
+          colSpan,
+          classes: cellClasses,
+          isEmpty: false,
+          startMin,
+          endMin,
+          startLabel,
+          endLabel,
+        });
         i += colSpan;
       } else {
         processedSchedule[day].push({ slot, colSpan: 1, classes: [], isEmpty: true });

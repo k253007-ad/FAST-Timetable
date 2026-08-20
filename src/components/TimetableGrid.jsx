@@ -1,6 +1,6 @@
 import { Fragment, useMemo } from 'react';
 import { splitClassValue, withAlpha } from '../utils/courseColors.js';
-import { buildSchedule, cleanRoom, formatSlot, slotMinuteRange } from '../utils/schedule.js';
+import { buildSchedule, cleanRoom, formatSlot } from '../utils/schedule.js';
 import { IconAlert, IconCalendar } from './Icons.jsx';
 
 const TimetableGrid = ({ data, selectedClasses, courseColors, isDark }) => {
@@ -56,11 +56,9 @@ const TimetableGrid = ({ data, selectedClasses, courseColors, isDark }) => {
   let nextCellKey = null;
 
   if (todayIndex !== -1) {
-    const currentCell = processedSchedule[today]?.find((cell) => {
-      if (cell.isEmpty) return false;
-      const { startMin, endMin } = slotMinuteRange(cell.slot);
-      return nowMinutes >= startMin && nowMinutes < endMin;
-    });
+    const currentCell = processedSchedule[today]?.find(
+      (cell) => !cell.isEmpty && nowMinutes >= cell.startMin && nowMinutes < cell.endMin
+    );
     if (currentCell) currentCellKey = `${today}-${currentCell.slot}`;
   }
 
@@ -72,8 +70,7 @@ const TimetableGrid = ({ data, selectedClasses, courseColors, isDark }) => {
       const upcoming = processedSchedule[day]?.find((cell) => {
         if (cell.isEmpty) return false;
         if (!isToday) return true;
-        const { startMin } = slotMinuteRange(cell.slot);
-        return startMin > nowMinutes;
+        return cell.startMin > nowMinutes;
       });
       if (upcoming) nextCellKey = `${day}-${upcoming.slot}`;
     }
