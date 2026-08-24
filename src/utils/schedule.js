@@ -30,8 +30,33 @@ export const slotMinuteRange = (slot) => {
 export const cleanRoom = (room) =>
   (room || 'N/A')
     .replace(/Academic Block/gi, 'AB')
+    .replace(/\bRoom\s*/gi, '') // drop the word "Room" — redundant, and eats space on mobile
     .replace(/\s*\(\d+\)\s*$/, '') // strip trailing seating capacity, e.g. "(50)"
     .trim();
+
+const ABBR_STOPWORDS = new Set([
+  'of', 'and', 'the', 'in', 'for', 'to', 'on', 'with', 'a', 'an', 'i', 'ii', 'iii',
+]);
+
+// "Applied Physics" -> "AP", "Object Oriented Programming" -> "OOP" — used by
+// notifications, which need a course label short enough to fit a native
+// notification's title bar. Strips a trailing "- Lab" first.
+export const abbreviateCourse = (name) => {
+  if (!name) return '';
+  const base = name.replace(/\s*-\s*Lab\s*$/i, '').trim();
+  const words = base.split(/\s+/).filter((w) => w && !ABBR_STOPWORDS.has(w.toLowerCase()));
+  if (words.length === 0) return base.slice(0, 3).toUpperCase();
+  if (words.length === 1) return words[0].slice(0, 3).toUpperCase();
+  return words.map((w) => w[0].toUpperCase()).join('');
+};
+
+// Stable identity for a scheduled cell, shared by useClassNotifications and
+// NowNext so they agree on which session is which without either
+// recomputing the other's logic.
+export const sessionKey = (cell) => {
+  const item = cell.classes[0];
+  return `${item.Course}|${item.Section}|${cell.startMin}|${cell.endMin}`;
+};
 
 const sameClass = (a, b) =>
   a.Course === b.Course && a.Section === b.Section && a.Instructor === b.Instructor;

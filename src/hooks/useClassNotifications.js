@@ -1,0 +1,208 @@
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { buildSchedule, cleanRoom, abbreviateCourse, sessionKey } from '../utils/schedule.js';
+import {
+  registerServiceWorker,
+  notificationPermission,
+  requestNotificationPermission,
+  showAppNotification,
+} from '../utils/notifications.js';
+
+// Always the *Main* profile's own saved selection, independent of whichever
+// profile tab is currently open in ClassSelector — "the main timetable is
+// the user's timetable" is the one notifications are computed from. Read
+// fresh from localStorage on every tick rather than kept in React state, so
+// this stays correct even while the user is browsing a friend's profile.
+const MAIN_KEY = 'selectedClasses_main';
+const TICK_MS = 20000; // fine enough to catch the "10 minutes left" checkpoint promptly
+
+const getMainClasses = () => {
+  try {
+    const saved = localStorage.getItem(MAIN_KEY);
+    return saved ? JSON.parse(saved) : [];
+  } catch {
+    return [];
+  }
+};
+
+const formatCountdown = (mins) => {
+  if (mins <= 0) return 'now';
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
+};
+
+/**
+ * Drives the "now / next class" local notification timer for the Main
+ * profile. No backend — fires while the app is open/backgrounded via a
+ * client-side interval; see public/sw.js + utils/notifications.js for why a
+ * service worker is involved at all (action-button support only).
+ */
+export const useClassNotifications = (data) => {
+  const [permission, setPermission] = useState(notificationPermission);
+  const [current, setCurrent] = useState(null);
+  const [next, setNext] = useState(null);
+  // Mirrors manualEndedKeyRef but as real state, so NowNext (rendered via
+  // App.jsx) reflects a "Class ended" click immediately instead of waiting
+  // up to TICK_MS for the next interval tick.
+  const [manualEndedKey, setManualEndedKey] = useState(null);
+
+  const currentRef = useRef(null);
+  const manualEndedKeyRef = useRef(null);
+  const notifiedNowKeyRef = useRef(null);
+  const notifiedNextKeyRef = useRef(null);
+  const dismissedNextRef = useRef(new Set());
+  const tenMinFiredRef = useRef(new Set());
+  const lastDayRef = useRef(null);
+
+  useEffect(() => {
+    registerServiceWorker();
+  }, []);
+
+  // Action-button clicks / notification dismissals bounce back from the SW.
+  useEffect(() => {
+    if (!('serviceWorker' in navigator)) return undefined;
+    const onMessage = (event) => {
+      const msg = event.data;
+      if (!msg) return;
+      if (msg.type === 'CLASS_ENDED' && msg.key) {
+        manualEndedKeyRef.current = msg.key;
+        setManualEndedKey(msg.key);
+      } else if (msg.type === 'NOTIFICATION_CLOSED' && msg.tag === 'next-class' && msg.key) {
+        dismissedNextRef.current.add(msg.key);
+      }
+    };
+    navigator.serviceWorker.addEventListener('message', onMessage);
+    return () => navigator.serviceWorker.removeEventListener('message', onMessage);
+  }, []);
+
+  const requestPermission = useCallback(async () => {
+    const result = await requestNotificationPermission();
+    setPermission(result);
+    return result;
+  }, []);
+
+  // Used by both the SW action button (via the message listener above) and
+  // an in-app "Class ended" button — same effect either way.
+  const markCurrentEnded = useCallback(() => {
+    if (currentRef.current?.key) {
+      manualEndedKeyRef.current = currentRef.current.key;
+      setManualEndedKey(currentRef.current.key);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!data?.timetable) return undefined;
+
+    const tick = () => {
+      const now = new Date();
+      const today = now.toLocaleDateString('en-US', { weekday: 'long' });
+
+      // A new calendar day reuses the same course/section/time keys as any
+      // previous day, so notification bookkeeping must reset at midnight.
+      if (lastDayRef.current !== today) {
+        lastDayRef.current = today;
+        notifiedNowKeyRef.current = null;
+        notifiedNextKeyRef.current = null;
+        manualEndedKeyRef.current = null;
+        dismissedNextRef.current.clear();
+        tenMinFiredRef.current.clear();
+      }
+
+      const mainClasses = getMainClasses();
+      const { processedSchedule } = buildSchedule(data, mainClasses);
+      const nowMinutes = now.getHours() * 60 + now.getMinutes();
+      const sessions = (processedSchedule[today] || []).filter((cell) => !cell.isEmpty);
+      const currentCell = sessions.find((cell) => nowMinutes >= cell.startMin && nowMinutes < cell.endMin);
+      const nextCell = sessions.find((cell) => cell.startMin > nowMinutes);
+
+      const currentKey = currentCell ? sessionKey(currentCell) : null;
+      if (manualEndedKeyRef.current && manualEndedKeyRef.current !== currentKey) {
+        manualEndedKeyRef.current = null; // the real class changed — stop suppressing
+        setManualEndedKey(null);
+      }
+      const effectiveCurrentKey = currentKey && manualEndedKeyRef.current === currentKey ? null : currentKey;
+
+      let currentInfo = null;
+      if (effectiveCurrentKey && currentCell) {
+        const item = currentCell.classes[0];
+        currentInfo = {
+          key: effectiveCurrentKey,
+          course: item.Course,
+          abbr: abbreviateCourse(item.Course),
+          room: cleanRoom(item.Room),
+          endLabel: currentCell.endLabel,
+        };
+      }
+
+      let nextInfo = null;
+      if (nextCell) {
+        const item = nextCell.classes[0];
+        nextInfo = {
+          key: sessionKey(nextCell),
+          course: item.Course,
+          abbr: abbreviateCourse(item.Course),
+          room: cleanRoom(item.Room),
+          startLabel: nextCell.startLabel,
+          minutesLeft: Math.max(0, nextCell.startMin - nowMinutes),
+        };
+      }
+
+      currentRef.current = currentInfo;
+      setCurrent(currentInfo);
+      setNext(nextInfo);
+
+      if (notificationPermission() !== 'granted') return;
+
+      if (currentInfo && notifiedNowKeyRef.current !== currentInfo.key) {
+        showAppNotification({
+          title: `Now: ${currentInfo.abbr}`,
+          body: `${currentInfo.room} · Ends ${currentInfo.endLabel}`,
+          tag: 'now-class',
+          data: { key: currentInfo.key },
+          actions: [{ action: 'ended', title: 'Class ended' }],
+        });
+        notifiedNowKeyRef.current = currentInfo.key;
+        notifiedNextKeyRef.current = null;
+      }
+
+      if (!currentInfo && nextInfo) {
+        const isNewNext = notifiedNextKeyRef.current !== nextInfo.key;
+        if (isNewNext) {
+          showAppNotification({
+            title: `Next class in ${formatCountdown(nextInfo.minutesLeft)}`,
+            body: `${nextInfo.abbr} · ${nextInfo.room}`,
+            tag: 'next-class',
+            data: { key: nextInfo.key },
+          });
+          notifiedNextKeyRef.current = nextInfo.key;
+          dismissedNextRef.current.delete(nextInfo.key);
+          tenMinFiredRef.current.delete(nextInfo.key);
+          if (nextInfo.minutesLeft <= 10) tenMinFiredRef.current.add(nextInfo.key);
+        } else if (
+          dismissedNextRef.current.has(nextInfo.key) &&
+          nextInfo.minutesLeft <= 10 &&
+          !tenMinFiredRef.current.has(nextInfo.key)
+        ) {
+          showAppNotification({
+            title: `Next class in ${formatCountdown(nextInfo.minutesLeft)}`,
+            body: `${nextInfo.abbr} · ${nextInfo.room}`,
+            tag: 'next-class',
+            data: { key: nextInfo.key },
+          });
+          tenMinFiredRef.current.add(nextInfo.key);
+        }
+      }
+
+      if (!currentInfo && !nextInfo) {
+        notifiedNowKeyRef.current = null;
+      }
+    };
+
+    tick();
+    const id = setInterval(tick, TICK_MS);
+    return () => clearInterval(id);
+  }, [data]);
+
+  return { permission, requestPermission, current, next, markCurrentEnded, manualEndedKey };
+};

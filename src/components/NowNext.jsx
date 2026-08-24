@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { buildSchedule, cleanRoom } from '../utils/schedule.js';
+import { buildSchedule, cleanRoom, sessionKey } from '../utils/schedule.js';
 
 /**
  * "Now" / "Next" status card shown between the class selector and the grid.
@@ -7,7 +7,7 @@ import { buildSchedule, cleanRoom } from '../utils/schedule.js';
  * than reaching into tomorrow (the grid's own now/next cell highlighting
  * still looks across the whole week; this card is a same-day summary).
  */
-const NowNext = ({ data, selectedClasses }) => {
+const NowNext = ({ data, selectedClasses, isMainProfile, onClassEnded, manualEndedKey }) => {
   const { processedSchedule } = useMemo(
     () => buildSchedule(data, selectedClasses),
     [data, selectedClasses]
@@ -21,9 +21,15 @@ const NowNext = ({ data, selectedClasses }) => {
 
   const todaySessions = (processedSchedule[today] || []).filter((cell) => !cell.isEmpty);
 
-  const currentSession = todaySessions.find(
+  const rawCurrentSession = todaySessions.find(
     (cell) => nowMinutes >= cell.startMin && nowMinutes < cell.endMin
   );
+  // A "Class ended" click (this profile only) suppresses the current session
+  // immediately rather than waiting for its real scheduled end time.
+  const currentSession =
+    rawCurrentSession && isMainProfile && manualEndedKey === sessionKey(rawCurrentSession)
+      ? null
+      : rawCurrentSession;
 
   const nextSession = todaySessions.find((cell) => cell.startMin > nowMinutes);
 
@@ -80,6 +86,16 @@ const NowNext = ({ data, selectedClasses }) => {
             {start} – {end} · {room}
           </span>
           <span className="nownext-meta">{instructor}</span>
+          {isMainProfile && onClassEnded && (
+            <button
+              type="button"
+              className="link-button nownext-ended-btn"
+              onClick={onClassEnded}
+              title="Mark this class as ended early — switches your notifications to the next class"
+            >
+              Class ended
+            </button>
+          )}
         </div>
       );
     }

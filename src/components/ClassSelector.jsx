@@ -12,8 +12,9 @@ import { IconChevronDown, IconSearch, IconX } from './Icons.jsx';
  *  - Auto: pick a student section (e.g. "BCS-3A") or a teacher name and
  *    every class belonging to it is added/removed as a group.
  *
- * The card can also be minimized (collapses everything but the mode/profile
- * toolbar), and holds up to `profileCount` independent saved timetables
+ * The card can also be minimized (collapses everything but the minimize
+ * button + profile toolbar — the mode tabs collapse too), and holds up to
+ * `profileCount` independent saved timetables
  * (e.g. "my" schedule in slot 1, a friend's in slot 2) via `activeProfile` /
  * `onSwitchProfile` — each profile's selection is a separate saved list.
  */
@@ -154,7 +155,10 @@ const ClassSelector = ({
     setMinimized((v) => !v);
   };
 
-  const profileNumbers = Array.from({ length: profileCount }, (_, i) => i + 1);
+  // "main" is a fixed extra slot before the numbered ones — it's the user's
+  // own timetable, and the one class notifications are computed from
+  // regardless of which slot is open here (see App.jsx / useClassNotifications).
+  const profileIds = ['main', ...Array.from({ length: profileCount }, (_, i) => i + 1)];
 
   return (
     <section className="card selector-card no-print" ref={rootRef}>
@@ -171,26 +175,28 @@ const ClassSelector = ({
       </div>
 
       <div className="selector-toolbar">
-        <div className="mode-tabs" role="tablist" aria-label="Selection mode">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={mode === 'manual'}
-            className={`mode-tab${mode === 'manual' ? ' is-active' : ''}`}
-            onClick={() => switchMode('manual')}
-          >
-            Manual select
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={mode === 'auto'}
-            className={`mode-tab${mode === 'auto' ? ' is-active' : ''}`}
-            onClick={() => switchMode('auto')}
-          >
-            Auto select
-          </button>
-        </div>
+        {!minimized && (
+          <div className="mode-tabs" role="tablist" aria-label="Selection mode">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={mode === 'manual'}
+              className={`mode-tab${mode === 'manual' ? ' is-active' : ''}`}
+              onClick={() => switchMode('manual')}
+            >
+              Manual select
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={mode === 'auto'}
+              className={`mode-tab${mode === 'auto' ? ' is-active' : ''}`}
+              onClick={() => switchMode('auto')}
+            >
+              Auto select
+            </button>
+          </div>
+        )}
 
         <div className="toolbar-secondary">
           <button
@@ -205,17 +211,17 @@ const ClassSelector = ({
           </button>
 
           <div className="profile-tabs" role="tablist" aria-label="Timetable slot">
-            {profileNumbers.map((n) => (
+            {profileIds.map((id) => (
               <button
-                key={n}
+                key={id}
                 type="button"
                 role="tab"
-                aria-selected={activeProfile === n}
-                className={`profile-tab${activeProfile === n ? ' is-active' : ''}`}
-                onClick={() => onSwitchProfile(n)}
-                title={`Timetable ${n}`}
+                aria-selected={activeProfile === id}
+                className={`profile-tab${activeProfile === id ? ' is-active' : ''}${id === 'main' ? ' profile-tab-main' : ''}`}
+                onClick={() => onSwitchProfile(id)}
+                title={id === 'main' ? 'Main — your own timetable' : `Timetable ${id}`}
               >
-                {n}
+                {id === 'main' ? 'Main' : id}
               </button>
             ))}
           </div>

@@ -5,9 +5,12 @@ import ClassSelector from './components/ClassSelector.jsx';
 import NowNext from './components/NowNext.jsx';
 import { fetchData } from './services/dataService.js';
 import { assignCourseColors } from './utils/courseColors.js';
+import { useClassNotifications } from './hooks/useClassNotifications.js';
 import {
   BrandMark,
   IconAlert,
+  IconBell,
+  IconBellOff,
   IconChevronDown,
   IconDownload,
   IconImage,
@@ -33,17 +36,25 @@ const PROFILE_COUNT = 5;
 
 // Profile 1 keeps the legacy "selectedClasses" key so existing users' saved
 // selections keep landing in the right place; profiles 2-5 are additive.
-const getProfileStorageKey = (profile) =>
-  profile === 1 ? 'selectedClasses' : `selectedClasses_${profile}`;
+// "main" (added 2026-08-25) is a separate, additional slot — never repurposes
+// an existing key — that specifically represents the user's OWN timetable;
+// it's what useClassNotifications reads regardless of which profile tab is
+// currently open, and it's the default landing slot for new users.
+const getProfileStorageKey = (profile) => {
+  if (profile === 'main') return 'selectedClasses_main';
+  return profile === 1 ? 'selectedClasses' : `selectedClasses_${profile}`;
+};
 
 const getSavedActiveProfile = () => {
   try {
-    const saved = Number(localStorage.getItem('activeProfile'));
-    if (Number.isInteger(saved) && saved >= 1 && saved <= PROFILE_COUNT) return saved;
+    const saved = localStorage.getItem('activeProfile');
+    if (saved === 'main') return 'main';
+    const n = Number(saved);
+    if (Number.isInteger(n) && n >= 1 && n <= PROFILE_COUNT) return n;
   } catch {
     /* storage unavailable */
   }
-  return 1;
+  return 'main';
 };
 
 const getSavedClasses = (profile) => {
@@ -81,6 +92,8 @@ function App() {
   const captureRef = useRef(null);
   const exportMenuRef = useRef(null);
   const hasDataRef = useRef(false);
+
+  const notif = useClassNotifications(timetableData);
 
   useEffect(() => {
     hasDataRef.current = timetableData !== null;
@@ -298,6 +311,33 @@ function App() {
             <button
               type="button"
               className="btn btn-ghost btn-icon"
+              onClick={notif.permission === 'granted' ? undefined : notif.requestPermission}
+              disabled={notif.permission === 'unsupported' || notif.permission === 'granted'}
+              aria-label={
+                notif.permission === 'granted'
+                  ? 'Class notifications are on'
+                  : notif.permission === 'denied'
+                    ? 'Notifications blocked — enable them in your browser settings'
+                    : notif.permission === 'unsupported'
+                      ? 'Notifications aren’t supported in this browser'
+                      : 'Enable class notifications'
+              }
+              title={
+                notif.permission === 'granted'
+                  ? 'Class notifications are on — based on your Main timetable'
+                  : notif.permission === 'denied'
+                    ? 'Notifications blocked — enable them in your browser settings'
+                    : notif.permission === 'unsupported'
+                      ? 'Notifications aren’t supported in this browser (try installing this site as an app first)'
+                      : 'Enable class notifications for your Main timetable'
+              }
+            >
+              {notif.permission === 'granted' ? <IconBell size={17} /> : <IconBellOff size={17} />}
+            </button>
+
+            <button
+              type="button"
+              className="btn btn-ghost btn-icon"
               onClick={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
               aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
               title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
@@ -364,7 +404,13 @@ function App() {
               onSwitchProfile={switchProfile}
             />
 
-            <NowNext data={timetableData} selectedClasses={selectedClasses} />
+            <NowNext
+              data={timetableData}
+              selectedClasses={selectedClasses}
+              isMainProfile={activeProfile === 'main'}
+              onClassEnded={notif.markCurrentEnded}
+              manualEndedKey={notif.manualEndedKey}
+            />
 
             <div ref={captureRef} data-capture className="capture-area">
               <TimetableGrid
