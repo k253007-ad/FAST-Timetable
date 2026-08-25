@@ -7,11 +7,11 @@ import { IconChevronDown, IconSearch, IconX } from './Icons.jsx';
  * shown as removable chips. Stored values keep the legacy
  * "Course - Section" format so existing saved selections keep working.
  *
- * Three selection modes (replaced the old Manual/Auto 2-tab layout on
+ * Four selection modes (replaced the old Manual/Auto 2-tab layout on
  * 2026-08-25 — "Auto" used to nest Student-section/Teacher under one tab;
- * Student-section selection is gone entirely now that Roll No gives a more
- * precise, per-student pick, and Teacher is a top-level tab instead of a
- * sub-toggle):
+ * Section was dropped entirely at first in favor of the more precise Roll No
+ * pick, then added back as its own tab on 2026-08-26 since some students
+ * just want "everything BCS-3A takes" rather than one specific student):
  *  - Manual: pick individual course sections one at a time (original flow).
  *  - Roll No: pick a specific student's roll number (e.g. "25K-3068") and
  *    every class *that student* takes is added/removed as a group — built
@@ -20,6 +20,9 @@ import { IconChevronDown, IconSearch, IconX } from './Icons.jsx';
  *    electives vary per student even within the same nominal section.
  *  - Teacher: pick a teacher name and every class they teach is added/
  *    removed as a group — built from `data.timetable`, same as before.
+ *  - Section: pick a section/cohort code (e.g. "BCS-3A") and every class
+ *    tagged with that section is added/removed as a group — built from
+ *    `data.timetable`, same underlying mechanism as Teacher.
  *
  * The card can also be minimized (collapses everything but the minimize
  * button + profile toolbar — the mode tabs collapse too), and holds up to
@@ -37,9 +40,9 @@ const ClassSelector = ({
   profileCount,
   onSwitchProfile,
 }) => {
-  const [mode, setMode] = useState('manual'); // 'manual' | 'rollno' | 'teacher'
+  const [mode, setMode] = useState('manual'); // 'manual' | 'rollno' | 'teacher' | 'section'
   const [query, setQuery] = useState('');
-  const [groupQuery, setGroupQuery] = useState(''); // shared search box for roll no + teacher tabs
+  const [groupQuery, setGroupQuery] = useState(''); // shared search box for roll no / teacher / section tabs
   const [open, setOpen] = useState(false);
   const [minimized, setMinimized] = useState(false);
   const rootRef = useRef(null);
@@ -98,16 +101,21 @@ const ClassSelector = ({
   const hasData = allClasses.length > 0;
   const hasRollData = (data?.rollNumbers?.length ?? 0) > 0;
 
-  // Group every class by instructor (Teacher tab) and every roll number's
-  // classes by that roll number (Roll No tab), so each tab can add/remove a
-  // whole group at once.
-  const { instructorGroups, rollNoGroups } = useMemo(() => {
+  // Group every class by instructor (Teacher tab), by section/cohort code
+  // (Section tab), and every roll number's classes by that roll number (Roll
+  // No tab), so each tab can add/remove a whole group at once.
+  const { instructorGroups, sectionGroups, rollNoGroups } = useMemo(() => {
     const instructorMap = new Map();
+    const sectionMap = new Map();
     (data?.timetable || []).forEach((item) => {
+      const value = `${item.Course} - ${item.Section}`;
       if (item.Instructor && item.Instructor !== 'N/A') {
-        const value = `${item.Course} - ${item.Section}`;
         if (!instructorMap.has(item.Instructor)) instructorMap.set(item.Instructor, new Set());
         instructorMap.get(item.Instructor).add(value);
+      }
+      if (item.Section && item.Section !== 'N/A') {
+        if (!sectionMap.has(item.Section)) sectionMap.set(item.Section, new Set());
+        sectionMap.get(item.Section).add(value);
       }
     });
 
@@ -124,13 +132,19 @@ const ClassSelector = ({
         .map(([name, classSet]) => ({ name, classes: [...classSet] }))
         .sort((a, b) => a.name.localeCompare(b.name));
 
-    return { instructorGroups: toGroups(instructorMap), rollNoGroups: toGroups(rollMap) };
+    return {
+      instructorGroups: toGroups(instructorMap),
+      sectionGroups: toGroups(sectionMap),
+      rollNoGroups: toGroups(rollMap),
+    };
   }, [data]);
 
-  const groups = useMemo(
-    () => (mode === 'rollno' ? rollNoGroups : mode === 'teacher' ? instructorGroups : []),
-    [mode, rollNoGroups, instructorGroups]
-  );
+  const groups = useMemo(() => {
+    if (mode === 'rollno') return rollNoGroups;
+    if (mode === 'teacher') return instructorGroups;
+    if (mode === 'section') return sectionGroups;
+    return [];
+  }, [mode, rollNoGroups, instructorGroups, sectionGroups]);
 
   const filteredGroups = useMemo(() => {
     const tokens = groupQuery.toLowerCase().split(/\s+/).filter(Boolean);
@@ -167,10 +181,16 @@ const ClassSelector = ({
   // regardless of which slot is open here (see App.jsx / useClassNotifications).
   const profileIds = ['main', ...Array.from({ length: profileCount }, (_, i) => i + 1)];
 
-  const groupUnitLabel = mode === 'rollno' ? 'roll numbers' : 'instructors';
+  const groupUnitLabel =
+    mode === 'rollno' ? 'roll numbers' : mode === 'section' ? 'sections' : 'instructors';
   const groupPlaceholder =
-    mode === 'rollno' ? 'Search your roll number — e.g. “25K-3068”' : 'Search instructor name';
-  const groupAriaLabel = mode === 'rollno' ? 'Search roll numbers' : 'Search instructors';
+    mode === 'rollno'
+      ? 'Search your roll number — e.g. “25K-3068”'
+      : mode === 'section'
+        ? 'Search section — e.g. “BCS-3A”'
+        : 'Search instructor name';
+  const groupAriaLabel =
+    mode === 'rollno' ? 'Search roll numbers' : mode === 'section' ? 'Search sections' : 'Search instructors';
 
   return (
     <section className="card selector-card no-print" ref={rootRef}>
@@ -215,6 +235,15 @@ const ClassSelector = ({
               onClick={() => switchMode('teacher')}
             >
               Teacher
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={mode === 'section'}
+              className={`mode-tab${mode === 'section' ? ' is-active' : ''}`}
+              onClick={() => switchMode('section')}
+            >
+              Section
             </button>
           </div>
         )}
@@ -331,7 +360,9 @@ const ClassSelector = ({
         </p>
       )}
 
-      {!minimized && (mode === 'rollno' || mode === 'teacher') && (mode === 'teacher' || hasRollData) && (
+      {!minimized &&
+        (mode === 'rollno' || mode === 'teacher' || mode === 'section') &&
+        (mode !== 'rollno' || hasRollData) && (
         <div className="combobox" ref={comboboxRef}>
           <span className="combobox-icon">
             <IconSearch size={17} />
