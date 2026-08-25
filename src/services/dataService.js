@@ -1,8 +1,9 @@
 // Fetches and parses timetable data from the official Google Sheets source.
 //
-// Flow: a small metadata API tells us the sheet URL plus the gid of each
-// per-day tab; each tab is fetched as a gviz JSONP payload, unwrapped, and
-// flattened into { Course, Section, Instructor, Room, Day, Time } records.
+// Flow: a small metadata API tells us the sheet URL plus the name of each
+// per-day tab; each tab is fetched by name (gviz `sheet=` param, no gid
+// needed) as a JSONP payload, unwrapped, and flattened into
+// { Course, Section, Instructor, Room, Day, Time } records.
 
 const API_META_URL = '/api/data';
 
@@ -31,7 +32,7 @@ const parseCellValue = (cellValue) => {
 /** Fetches one day tab and returns its flattened rows, or null on failure. */
 const fetchSheet = async (sheetUrl, sheetInfo) => {
   try {
-    const response = await fetch(`${sheetUrl}${sheetInfo.gid}`);
+    const response = await fetch(`${sheetUrl}${encodeURIComponent(sheetInfo.name)}`);
     if (!response.ok) {
       console.error(`Failed to fetch sheet: ${sheetInfo.name}`, response.statusText);
       return null;
@@ -96,7 +97,7 @@ const fetchSheet = async (sheetUrl, sheetInfo) => {
 };
 
 export const fetchData = async () => {
-  // Step 1: metadata — sheet URL and the gid for each day tab.
+  // Step 1: metadata — sheet URL and the name of each day tab.
   const metaResponse = await fetch(API_META_URL, {
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
     cache: 'no-cache',
