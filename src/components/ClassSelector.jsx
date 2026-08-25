@@ -1,6 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { splitClassValue, formatClassLabel } from '../utils/courseColors.js';
-import { IconChevronDown, IconSearch, IconX } from './Icons.jsx';
+import { IconAlert, IconChevronDown, IconSearch, IconX } from './Icons.jsx';
 
 /**
  * Searchable multi-select for course sections, with the current selection
@@ -194,6 +194,15 @@ const ClassSelector = ({
 
   return (
     <section className="card selector-card no-print" ref={rootRef}>
+      <div className="data-disclaimer" role="note">
+        <IconAlert size={15} />
+        <span>
+          This is an unofficial tool maintained independently by a student. Since
+          data is updated manually, please cross-verify your schedule with official
+          university announcements.
+        </span>
+      </div>
+
       <div className="selector-head">
         <h2 className="selector-title">My classes</h2>
         {selectedClasses.length > 0 && (
