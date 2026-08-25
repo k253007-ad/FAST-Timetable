@@ -191,6 +191,13 @@ const ClassSelector = ({
         : 'Search instructor name';
   const groupAriaLabel =
     mode === 'rollno' ? 'Search roll numbers' : mode === 'section' ? 'Search sections' : 'Search instructors';
+  // Placeholder text truncates on narrow phone screens before the "e.g. ..."
+  // example ever becomes visible, so the same example is repeated as a small
+  // hint line below the input — CSS shows that hint only below the mobile
+  // breakpoint, since the placeholder already covers it on wider screens.
+  const manualExampleHint = 'e.g. “CS2005” or “OOP 2A”';
+  const groupExampleHint =
+    mode === 'rollno' ? 'e.g. “25K-3068”' : mode === 'section' ? 'e.g. “BCS-3A”' : null;
 
   return (
     <section className="card selector-card no-print" ref={rootRef}>
@@ -325,6 +332,7 @@ const ClassSelector = ({
               <IconX size={15} />
             </button>
           )}
+          {!query && <p className="combobox-hint">{manualExampleHint}</p>}
 
           {open && hasData && (
             <div className="combobox-panel" id={panelId} role="group" aria-label="Matching sections">
@@ -409,6 +417,7 @@ const ClassSelector = ({
               <IconX size={15} />
             </button>
           )}
+          {!groupQuery && groupExampleHint && <p className="combobox-hint">{groupExampleHint}</p>}
 
           {open && hasData && (
             <div

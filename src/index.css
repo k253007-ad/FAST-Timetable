@@ -623,6 +623,10 @@ button {
   cursor: not-allowed;
 }
 
+.combobox-hint {
+  display: none;
+}
+
 .combobox-clear {
   position: absolute;
   right: 9px;
@@ -1410,6 +1414,17 @@ button {
 
   .combobox-input {
     font-size: 16px; /* prevents iOS focus zoom */
+  }
+
+  /* At 16px the placeholder's "e.g. ..." example gets clipped by the input's
+     width before it's ever visible, so repeat it as a real, wrapping line
+     below the input on narrow screens only — desktop still relies on the
+     placeholder alone. */
+  .combobox-hint {
+    display: block;
+    margin: 5px 2px 0;
+    font-size: 11.5px;
+    color: var(--text-3);
   }
 
   .grid-toolbar {
