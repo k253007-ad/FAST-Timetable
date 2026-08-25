@@ -425,7 +425,7 @@ function App() {
       </main>
 
       <footer className="app-footer no-print">
-        <span>An unofficial tool, built by students for FAST NUCES students.</span>
+        <span>An unofficial tool, built by Adnan 25K-3007 for FAST NUCES students.</span>
         <span>
           Live from the official timetable sheet
           {lastUpdated && ` · synced ${timeAgo(lastUpdated, now)}`} · auto-refreshes hourly
