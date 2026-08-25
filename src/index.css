@@ -463,7 +463,6 @@ button {
 }
 
 .mode-tabs,
-.auto-type-tabs,
 .profile-tabs {
   display: inline-flex;
   gap: 3px;
@@ -472,12 +471,7 @@ button {
   border-radius: var(--radius-sm);
 }
 
-.auto-type-tabs {
-  margin-bottom: 10px;
-}
-
-.mode-tab,
-.auto-type-tab {
+.mode-tab {
   border: none;
   background: transparent;
   color: var(--text-2);
@@ -489,13 +483,11 @@ button {
   transition: background-color 0.12s ease, color 0.12s ease, box-shadow 0.12s ease;
 }
 
-.mode-tab:hover,
-.auto-type-tab:hover {
+.mode-tab:hover {
   color: var(--text);
 }
 
-.mode-tab.is-active,
-.auto-type-tab.is-active {
+.mode-tab.is-active {
   background: var(--surface);
   color: var(--text);
   box-shadow: var(--shadow-sm);
@@ -561,11 +553,6 @@ button {
   padding: 0 8px;
   font-size: 11px;
   letter-spacing: 0.01em;
-}
-
-.auto-panel {
-  display: flex;
-  flex-direction: column;
 }
 
 /* Combobox */
@@ -1138,6 +1125,21 @@ button {
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
+}
+
+/* Desktop/print only (see the max-width:720px block below, which leaves
+   mobile on the base 12px/2-line size above) — step the font down for
+   longer course+section labels so the full text fits instead of getting
+   silently clipped by the line-clamp above. */
+@media (min-width: 721px), print {
+  .class-course--tier2 {
+    font-size: 10.5px;
+  }
+
+  .class-course--tier3 {
+    font-size: 9.3px;
+    -webkit-line-clamp: 3;
+  }
 }
 
 .class-meta {

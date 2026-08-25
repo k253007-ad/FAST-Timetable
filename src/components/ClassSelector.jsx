@@ -7,10 +7,19 @@ import { IconChevronDown, IconSearch, IconX } from './Icons.jsx';
  * shown as removable chips. Stored values keep the legacy
  * "Course - Section" format so existing saved selections keep working.
  *
- * Two selection modes:
+ * Three selection modes (replaced the old Manual/Auto 2-tab layout on
+ * 2026-08-25 — "Auto" used to nest Student-section/Teacher under one tab;
+ * Student-section selection is gone entirely now that Roll No gives a more
+ * precise, per-student pick, and Teacher is a top-level tab instead of a
+ * sub-toggle):
  *  - Manual: pick individual course sections one at a time (original flow).
- *  - Auto: pick a student section (e.g. "BCS-3A") or a teacher name and
- *    every class belonging to it is added/removed as a group.
+ *  - Roll No: pick a specific student's roll number (e.g. "25K-3068") and
+ *    every class *that student* takes is added/removed as a group — built
+ *    from `data.rollNumbers`, a separate optional data source (see
+ *    dataService.js). More precise than section-based selection since
+ *    electives vary per student even within the same nominal section.
+ *  - Teacher: pick a teacher name and every class they teach is added/
+ *    removed as a group — built from `data.timetable`, same as before.
  *
  * The card can also be minimized (collapses everything but the minimize
  * button + profile toolbar — the mode tabs collapse too), and holds up to
@@ -28,18 +37,17 @@ const ClassSelector = ({
   profileCount,
   onSwitchProfile,
 }) => {
-  const [mode, setMode] = useState('manual'); // 'manual' | 'auto'
-  const [autoType, setAutoType] = useState('student'); // 'student' | 'teacher'
+  const [mode, setMode] = useState('manual'); // 'manual' | 'rollno' | 'teacher'
   const [query, setQuery] = useState('');
-  const [autoQuery, setAutoQuery] = useState('');
+  const [groupQuery, setGroupQuery] = useState(''); // shared search box for roll no + teacher tabs
   const [open, setOpen] = useState(false);
   const [minimized, setMinimized] = useState(false);
   const rootRef = useRef(null);
   const comboboxRef = useRef(null);
   const inputRef = useRef(null);
-  const autoInputRef = useRef(null);
+  const groupInputRef = useRef(null);
   const panelId = useId();
-  const autoPanelId = useId();
+  const groupPanelId = useId();
 
   // Close on outside click / Escape while the dropdown is open. "Outside"
   // means outside the search box + its panel — not just outside the whole
@@ -54,7 +62,7 @@ const ClassSelector = ({
       if (e.key === 'Escape') {
         // Refocus first: the input's onFocus sets open=true, and the
         // close below must win when React batches the two updates.
-        (mode === 'manual' ? inputRef : autoInputRef).current?.focus();
+        (mode === 'manual' ? inputRef : groupInputRef).current?.focus();
         setOpen(false);
       }
     };
@@ -88,26 +96,27 @@ const ClassSelector = ({
   };
 
   const hasData = allClasses.length > 0;
+  const hasRollData = (data?.rollNumbers?.length ?? 0) > 0;
 
-  // Group every class by student section and by instructor, so auto-select
-  // can add/remove a whole group ("BCS-3A", or a teacher's name) at once.
-  const { sectionGroups, instructorGroups } = useMemo(() => {
-    if (!data?.timetable) return { sectionGroups: [], instructorGroups: [] };
-
-    const sectionMap = new Map();
+  // Group every class by instructor (Teacher tab) and every roll number's
+  // classes by that roll number (Roll No tab), so each tab can add/remove a
+  // whole group at once.
+  const { instructorGroups, rollNoGroups } = useMemo(() => {
     const instructorMap = new Map();
-
-    data.timetable.forEach((item) => {
-      const value = `${item.Course} - ${item.Section}`;
-
-      if (item.Section && item.Section !== 'N/A') {
-        if (!sectionMap.has(item.Section)) sectionMap.set(item.Section, new Set());
-        sectionMap.get(item.Section).add(value);
-      }
+    (data?.timetable || []).forEach((item) => {
       if (item.Instructor && item.Instructor !== 'N/A') {
+        const value = `${item.Course} - ${item.Section}`;
         if (!instructorMap.has(item.Instructor)) instructorMap.set(item.Instructor, new Set());
         instructorMap.get(item.Instructor).add(value);
       }
+    });
+
+    const rollMap = new Map();
+    (data?.rollNumbers || []).forEach((item) => {
+      if (!item.RollNo) return;
+      const value = `${item.Course} - ${item.Section}`;
+      if (!rollMap.has(item.RollNo)) rollMap.set(item.RollNo, new Set());
+      rollMap.get(item.RollNo).add(value);
     });
 
     const toGroups = (map) =>
@@ -115,19 +124,22 @@ const ClassSelector = ({
         .map(([name, classSet]) => ({ name, classes: [...classSet] }))
         .sort((a, b) => a.name.localeCompare(b.name));
 
-    return { sectionGroups: toGroups(sectionMap), instructorGroups: toGroups(instructorMap) };
+    return { instructorGroups: toGroups(instructorMap), rollNoGroups: toGroups(rollMap) };
   }, [data]);
 
-  const autoGroups = autoType === 'student' ? sectionGroups : instructorGroups;
+  const groups = useMemo(
+    () => (mode === 'rollno' ? rollNoGroups : mode === 'teacher' ? instructorGroups : []),
+    [mode, rollNoGroups, instructorGroups]
+  );
 
-  const filteredAutoGroups = useMemo(() => {
-    const tokens = autoQuery.toLowerCase().split(/\s+/).filter(Boolean);
-    if (tokens.length === 0) return autoGroups;
-    return autoGroups.filter((group) => {
+  const filteredGroups = useMemo(() => {
+    const tokens = groupQuery.toLowerCase().split(/\s+/).filter(Boolean);
+    if (tokens.length === 0) return groups;
+    return groups.filter((group) => {
       const haystack = group.name.toLowerCase();
       return tokens.every((t) => haystack.includes(t));
     });
-  }, [autoGroups, autoQuery]);
+  }, [groups, groupQuery]);
 
   const isGroupSelected = (classes) => classes.length > 0 && classes.every((c) => selectedClasses.includes(c));
 
@@ -139,14 +151,9 @@ const ClassSelector = ({
     });
   };
 
-  const switchAutoType = (type) => {
-    setAutoType(type);
-    setAutoQuery('');
-    setOpen(false);
-  };
-
   const switchMode = (nextMode) => {
     setMode(nextMode);
+    setGroupQuery('');
     setOpen(false);
   };
 
@@ -159,6 +166,11 @@ const ClassSelector = ({
   // own timetable, and the one class notifications are computed from
   // regardless of which slot is open here (see App.jsx / useClassNotifications).
   const profileIds = ['main', ...Array.from({ length: profileCount }, (_, i) => i + 1)];
+
+  const groupUnitLabel = mode === 'rollno' ? 'roll numbers' : 'instructors';
+  const groupPlaceholder =
+    mode === 'rollno' ? 'Search your roll number — e.g. “25K-3068”' : 'Search instructor name';
+  const groupAriaLabel = mode === 'rollno' ? 'Search roll numbers' : 'Search instructors';
 
   return (
     <section className="card selector-card no-print" ref={rootRef}>
@@ -184,16 +196,25 @@ const ClassSelector = ({
               className={`mode-tab${mode === 'manual' ? ' is-active' : ''}`}
               onClick={() => switchMode('manual')}
             >
-              Manual select
+              Manual
             </button>
             <button
               type="button"
               role="tab"
-              aria-selected={mode === 'auto'}
-              className={`mode-tab${mode === 'auto' ? ' is-active' : ''}`}
-              onClick={() => switchMode('auto')}
+              aria-selected={mode === 'rollno'}
+              className={`mode-tab${mode === 'rollno' ? ' is-active' : ''}`}
+              onClick={() => switchMode('rollno')}
             >
-              Auto select
+              Roll No
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={mode === 'teacher'}
+              className={`mode-tab${mode === 'teacher' ? ' is-active' : ''}`}
+              onClick={() => switchMode('teacher')}
+            >
+              Teacher
             </button>
           </div>
         )}
@@ -303,113 +324,93 @@ const ClassSelector = ({
         </div>
       )}
 
-      {!minimized && mode === 'auto' && (
-        <div className="auto-panel">
-          <div className="auto-type-tabs" role="tablist" aria-label="Auto-select by">
-            <button
-              type="button"
-              role="tab"
-              aria-selected={autoType === 'student'}
-              className={`auto-type-tab${autoType === 'student' ? ' is-active' : ''}`}
-              onClick={() => switchAutoType('student')}
-            >
-              Student
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={autoType === 'teacher'}
-              className={`auto-type-tab${autoType === 'teacher' ? ' is-active' : ''}`}
-              onClick={() => switchAutoType('teacher')}
-            >
-              Teacher
-            </button>
-          </div>
+      {!minimized && mode === 'rollno' && !hasRollData && (
+        <p className="selector-hint">
+          Roll-number selection isn’t available yet — check back once this data source is
+          connected.
+        </p>
+      )}
 
-          <div className="combobox" ref={comboboxRef}>
-            <span className="combobox-icon">
-              <IconSearch size={17} />
-            </span>
-            <input
-              ref={autoInputRef}
-              type="text"
-              className="combobox-input"
-              placeholder={
-                autoType === 'student'
-                  ? 'Search your section — e.g. “BCS-3A”'
-                  : 'Search instructor name'
-              }
-              value={autoQuery}
-              disabled={!hasData}
-              onChange={(e) => {
-                setAutoQuery(e.target.value);
-                setOpen(true);
+      {!minimized && (mode === 'rollno' || mode === 'teacher') && (mode === 'teacher' || hasRollData) && (
+        <div className="combobox" ref={comboboxRef}>
+          <span className="combobox-icon">
+            <IconSearch size={17} />
+          </span>
+          <input
+            ref={groupInputRef}
+            type="text"
+            className="combobox-input"
+            placeholder={groupPlaceholder}
+            value={groupQuery}
+            disabled={!hasData}
+            onChange={(e) => {
+              setGroupQuery(e.target.value);
+              setOpen(true);
+            }}
+            onFocus={() => setOpen(true)}
+            onClick={() => setOpen(true)}
+            role="combobox"
+            aria-expanded={open}
+            aria-controls={groupPanelId}
+            aria-label={groupAriaLabel}
+            autoComplete="off"
+            spellCheck="false"
+          />
+          {groupQuery && (
+            <button
+              type="button"
+              className="combobox-clear"
+              aria-label="Clear search"
+              onClick={() => {
+                setGroupQuery('');
+                groupInputRef.current?.focus();
               }}
-              onFocus={() => setOpen(true)}
-              onClick={() => setOpen(true)}
-              role="combobox"
-              aria-expanded={open}
-              aria-controls={autoPanelId}
-              aria-label={autoType === 'student' ? 'Search student sections' : 'Search instructors'}
-              autoComplete="off"
-              spellCheck="false"
-            />
-            {autoQuery && (
-              <button
-                type="button"
-                className="combobox-clear"
-                aria-label="Clear search"
-                onClick={() => {
-                  setAutoQuery('');
-                  autoInputRef.current?.focus();
-                }}
-              >
-                <IconX size={15} />
-              </button>
-            )}
+            >
+              <IconX size={15} />
+            </button>
+          )}
 
-            {open && hasData && (
-              <div
-                className="combobox-panel"
-                id={autoPanelId}
-                role="group"
-                aria-label={autoType === 'student' ? 'Matching sections' : 'Matching instructors'}
-              >
-                <div className="combobox-meta">
-                  {filteredAutoGroups.length === autoGroups.length
-                    ? `${autoGroups.length} ${autoType === 'student' ? 'sections' : 'instructors'}`
-                    : `${filteredAutoGroups.length} of ${autoGroups.length} ${autoType === 'student' ? 'sections' : 'instructors'}`}
-                </div>
-                <div className="combobox-list">
-                  {filteredAutoGroups.length === 0 ? (
-                    <div className="combobox-empty">
-                      No {autoType === 'student' ? 'sections' : 'instructors'} match “{autoQuery}”.
-                    </div>
-                  ) : (
-                    filteredAutoGroups.map((group) => {
-                      const checked = isGroupSelected(group.classes);
-                      return (
-                        <label key={group.name} className={`option-row${checked ? ' is-checked' : ''}`}>
-                          <input
-                            type="checkbox"
-                            className="option-checkbox"
-                            checked={checked}
-                            onChange={() => toggleGroup(group.classes)}
-                          />
-                          <span className="option-text">
-                            <span className="option-course">{group.name}</span>
-                            <span className="option-section">
-                              {group.classes.length} class{group.classes.length === 1 ? '' : 'es'}
-                            </span>
-                          </span>
-                        </label>
-                      );
-                    })
-                  )}
-                </div>
+          {open && hasData && (
+            <div
+              className="combobox-panel"
+              id={groupPanelId}
+              role="group"
+              aria-label={groupAriaLabel}
+            >
+              <div className="combobox-meta">
+                {filteredGroups.length === groups.length
+                  ? `${groups.length} ${groupUnitLabel}`
+                  : `${filteredGroups.length} of ${groups.length} ${groupUnitLabel}`}
               </div>
-            )}
-          </div>
+              <div className="combobox-list">
+                {filteredGroups.length === 0 ? (
+                  <div className="combobox-empty">
+                    No {groupUnitLabel} match “{groupQuery}”.
+                  </div>
+                ) : (
+                  filteredGroups.map((group) => {
+                    const checked = isGroupSelected(group.classes);
+                    return (
+                      <label key={group.name} className={`option-row${checked ? ' is-checked' : ''}`}>
+                        <input
+                          type="checkbox"
+                          className="option-checkbox"
+                          checked={checked}
+                          onChange={() => toggleGroup(group.classes)}
+                        />
+                        <span className="option-text">
+                          <span className="option-course">{group.name}</span>
+                          <span className="option-section">
+                            {group.classes.length} class{group.classes.length === 1 ? '' : 'es'}
+                          </span>
+                        </span>
+                      </label>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+          )}
         </div>
       )}
 

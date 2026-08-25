@@ -46,7 +46,7 @@ const NowNext = ({ data, selectedClasses, isMainProfile, onClassEnded, manualEnd
   const sessionDetails = (cell) => {
     const item = cell.classes[0];
     return {
-      course: item.Course,
+      course: item.Section !== 'N/A' ? `${item.Course} (${item.Section})` : item.Course,
       room: cleanRoom(item.Room),
       instructor: item.Instructor,
       start: cell.startLabel,

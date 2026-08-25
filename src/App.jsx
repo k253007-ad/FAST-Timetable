@@ -12,7 +12,7 @@ import {
   IconBell,
   IconBellOff,
   IconChevronDown,
-  IconDownload,
+  IconPrinter,
   IconImage,
   IconMoon,
   IconRefresh,
@@ -280,12 +280,12 @@ function App() {
                 aria-expanded={exportOpen}
                 title={
                   selectedClasses.length === 0
-                    ? 'Select classes first to export your timetable'
-                    : 'Export your timetable as an image'
+                    ? 'Select classes first to print your timetable'
+                    : 'Print your timetable as an image'
                 }
               >
-                <IconDownload size={16} />
-                <span className="btn-label">{exporting ? 'Exporting…' : 'Export'}</span>
+                <IconPrinter size={16} />
+                <span className="btn-label">{exporting ? 'Printing…' : 'Print'}</span>
                 <IconChevronDown size={14} />
               </button>
               {exportOpen && (

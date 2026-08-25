@@ -24,6 +24,17 @@
 const SHEET_ID = '1rRo5Gqu2nqj1K1xzxO-4n8KQmnXq7fx65P4Yz9CkxN0';
 const DAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
 
+// Roll-number selection sheet (added 2026-08-25, wired live the same day) — a
+// separate spreadsheet, one flat tab named ROLL_SHEET_TAB with columns
+// RollNo | Day | Time | Course | Section | Instructor | Room (built by
+// extracting the university's per-student PDF; see workspace root
+// TASK_roll_number_mode.md for the full pipeline). If this ever needs to be
+// unset again (sheet deleted/replaced without a new one ready), set it back
+// to null — getSheetData() then reports rollNumbers: null and the app's Roll
+// No tab shows an unavailable state instead of erroring.
+const ROLL_SHEET_ID = '1JJGeX8KPI305GanliNKKA6FA61Ku-ypFPs_0opKhXD0';
+const ROLL_SHEET_TAB = 'RollNumbers';
+
 const CACHE_MS = 10 * 60 * 1000; // re-check the tab list at most every 10 minutes
 let cache = null;
 let cacheAt = 0;
@@ -59,10 +70,38 @@ export async function getSheetData() {
     return { name: match };
   });
 
+  // Roll-number sheet check is best-effort and non-fatal: an unmatched
+  // `sheet=` name silently falls back to gviz's first tab instead of
+  // erroring (the same failure class the day-tab check above exists to
+  // catch), so verify the tab exists here too — but if this sheet is
+  // missing, unreachable, or misconfigured, Roll No mode just goes
+  // unavailable. It must never take the day tabs above down with it.
+  let rollNumbers = null;
+  if (ROLL_SHEET_ID) {
+    try {
+      const rollTabNames = await fetchTabNames(ROLL_SHEET_ID);
+      const rollTabMatch = rollTabNames.find(
+        (name) => name.toLowerCase() === ROLL_SHEET_TAB.toLowerCase()
+      );
+      if (rollTabMatch) {
+        rollNumbers = {
+          url: `https://docs.google.com/spreadsheets/d/${ROLL_SHEET_ID}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent(rollTabMatch)}`,
+        };
+      } else {
+        console.error(
+          `Roll-number sheet has no tab named "${ROLL_SHEET_TAB}". Tabs found: ${rollTabNames.join(', ')}`
+        );
+      }
+    } catch (err) {
+      console.error('Could not verify roll-number sheet tab list:', err.message);
+    }
+  }
+
   const data = {
     karachi: {
       url: `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&sheet=`,
       codes,
+      rollNumbers,
     },
   };
   cache = data;

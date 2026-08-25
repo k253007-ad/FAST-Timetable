@@ -1,13 +1,59 @@
-import { Fragment, useMemo } from 'react';
+import { Fragment, useEffect, useMemo, useRef } from 'react';
 import { splitClassValue, withAlpha } from '../utils/courseColors.js';
 import { buildSchedule, cleanRoom, formatSlot } from '../utils/schedule.js';
 import { IconAlert, IconCalendar } from './Icons.jsx';
 
+// A course+section label that's too long for its box (more common now that
+// the section is appended to the course name) used to just get silently
+// clipped by class-course's line-clamp, with no on-screen sign anything was
+// cut off — and there's no reliable way to predict from the string alone
+// whether it'll wrap to fit (word-break points vary: two labels the same
+// length can wrap completely differently). So this measures the *actual*
+// rendered box after layout and steps the font down only where real overflow
+// is detected, escalating one tier at a time until it fits or the largest
+// tier is reached. The tier classes' effect is scoped to desktop/print via a
+// media query in index.css, so this runs unconditionally — it's a harmless
+// no-op on mobile, which keeps its fixed size and clamp there.
+const TIER_CLASSES = ['class-course--tier2', 'class-course--tier3'];
+
+const fitCourseLabels = (container) => {
+  if (!container) return;
+  container.querySelectorAll('.class-course').forEach((el) => {
+    el.classList.remove(...TIER_CLASSES);
+    for (const tierClass of TIER_CLASSES) {
+      if (el.scrollHeight <= el.clientHeight + 1) break;
+      el.classList.add(tierClass);
+    }
+  });
+};
+
 const TimetableGrid = ({ data, selectedClasses, courseColors, isDark }) => {
+  const gridRef = useRef(null);
   const { days, timeSlots, processedSchedule, sessionCount, courseCount, clashCount } = useMemo(
     () => buildSchedule(data, selectedClasses),
     [data, selectedClasses]
   );
+
+  // Re-fit course labels after every render that could change them (new
+  // selection, new data) and whenever the grid's own size changes (window
+  // resize, sidebar toggling, browser zoom) — box width is what determines
+  // where text wraps, so a size change can un-fit or re-fit a label.
+  useEffect(() => {
+    const container = gridRef.current;
+    if (!container) return undefined;
+    fitCourseLabels(container);
+    const refit = () => fitCourseLabels(container);
+    const observer = new ResizeObserver(refit);
+    observer.observe(container);
+    // A real browser print can reflow the page at print-time dimensions
+    // without firing a resize/ResizeObserver event in every browser, so
+    // re-check explicitly when print starts.
+    window.addEventListener('beforeprint', refit);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('beforeprint', refit);
+    };
+  }, [processedSchedule]);
 
   if (!data?.timetable) return null;
 
@@ -21,7 +67,7 @@ const TimetableGrid = ({ data, selectedClasses, courseColors, isDark }) => {
           <h3>Build your weekly timetable</h3>
           <p>
             Search for a course above and tick the sections you’re enrolled in. Your schedule
-            appears here instantly — colour-coded, clash-checked, and ready to export.
+            appears here instantly — colour-coded, clash-checked, and ready to print.
           </p>
         </div>
       </section>
@@ -119,6 +165,7 @@ const TimetableGrid = ({ data, selectedClasses, courseColors, isDark }) => {
 
       <div className="tt-scroll">
         <div
+          ref={gridRef}
           className="tt"
           role="table"
           aria-label="Weekly timetable"
@@ -169,20 +216,24 @@ const TimetableGrid = ({ data, selectedClasses, courseColors, isDark }) => {
                     >
                       {isNow && <span className="now-badge">Now</span>}
                       {isNext && <span className="next-badge">Next</span>}
-                      {cell.classes.map((classItem, index) => (
-                        <div
-                          key={index}
-                          className="class-box"
-                          style={boxStyle(classItem.Course)}
-                          title={`${classItem.Course}${
-                            classItem.Section !== 'N/A' ? ` (${classItem.Section})` : ''
-                          } · ${cleanRoom(classItem.Room)} · ${classItem.Instructor}`}
-                        >
-                          <span className="class-course">{classItem.Course}</span>
-                          <span className="class-meta">{cleanRoom(classItem.Room)}</span>
-                          <span className="class-meta">{classItem.Instructor}</span>
-                        </div>
-                      ))}
+                      {cell.classes.map((classItem, index) => {
+                        const label =
+                          classItem.Section !== 'N/A'
+                            ? `${classItem.Course} (${classItem.Section})`
+                            : classItem.Course;
+                        return (
+                          <div
+                            key={index}
+                            className="class-box"
+                            style={boxStyle(classItem.Course)}
+                            title={`${label} · ${cleanRoom(classItem.Room)} · ${classItem.Instructor}`}
+                          >
+                            <span className="class-course">{label}</span>
+                            <span className="class-meta">{cleanRoom(classItem.Room)}</span>
+                            <span className="class-meta">{classItem.Instructor}</span>
+                          </div>
+                        );
+                      })}
                     </div>
                   );
                 })}
