@@ -33,7 +33,7 @@ const NowNext = ({ data, selectedClasses, isMainProfile, onClassEnded, manualEnd
 
   const nextSession = todaySessions.find((cell) => cell.startMin > nowMinutes);
 
-  const emptyReason = todaySessions.length === 0 ? 'No classes today' : 'No further classes';
+  const emptyReason = todaySessions.length === 0 ? 'No classes today' : 'No further classes today';
 
   const formatCountdown = (mins) => {
     if (mins <= 0) return 'starting now';

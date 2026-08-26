@@ -32,6 +32,14 @@ const formatCountdown = (mins) => {
   return `${m}m`;
 };
 
+// Reminder checkpoints, both for "current class ending soon" and "next class
+// starting soon" — a notification fires once per checkpoint per session, the
+// moment the countdown first drops to/below it (edge-triggered off the
+// previous tick's value, not just "is it currently <= t", so a class that's
+// already 3 minutes from ending when the app is first opened doesn't fire
+// all three checkpoints in a single burst).
+const REMINDER_CHECKPOINTS = [30, 10, 5];
+
 /**
  * Drives the "now / next class" local notification timer for the Main
  * profile. No backend — fires while the app is open/backgrounded via a
@@ -50,9 +58,9 @@ export const useClassNotifications = (data) => {
   const currentRef = useRef(null);
   const manualEndedKeyRef = useRef(null);
   const notifiedNowKeyRef = useRef(null);
-  const notifiedNextKeyRef = useRef(null);
-  const dismissedNextRef = useRef(new Set());
-  const tenMinFiredRef = useRef(new Set());
+  const notifiedEndedKeyRef = useRef(null); // "class ended, next up" — fires once per ended session
+  const endingSoonDiffRef = useRef(new Map()); // session key -> last-seen minutes-to-end
+  const startingSoonDiffRef = useRef(new Map()); // session key -> last-seen minutes-to-start
   const lastDayRef = useRef(null);
 
   useEffect(() => {
@@ -68,8 +76,6 @@ export const useClassNotifications = (data) => {
       if (msg.type === 'CLASS_ENDED' && msg.key) {
         manualEndedKeyRef.current = msg.key;
         setManualEndedKey(msg.key);
-      } else if (msg.type === 'NOTIFICATION_CLOSED' && msg.tag === 'next-class' && msg.key) {
-        dismissedNextRef.current.add(msg.key);
       }
     };
     navigator.serviceWorker.addEventListener('message', onMessage);
@@ -103,10 +109,10 @@ export const useClassNotifications = (data) => {
       if (lastDayRef.current !== today) {
         lastDayRef.current = today;
         notifiedNowKeyRef.current = null;
-        notifiedNextKeyRef.current = null;
+        notifiedEndedKeyRef.current = null;
         manualEndedKeyRef.current = null;
-        dismissedNextRef.current.clear();
-        tenMinFiredRef.current.clear();
+        endingSoonDiffRef.current.clear();
+        startingSoonDiffRef.current.clear();
       }
 
       const mainClasses = getMainClasses();
@@ -132,6 +138,7 @@ export const useClassNotifications = (data) => {
           abbr: abbreviateCourse(item.Course),
           room: cleanRoom(item.Room),
           endLabel: currentCell.endLabel,
+          minutesLeft: Math.max(0, currentCell.endMin - nowMinutes),
         };
       }
 
@@ -148,54 +155,79 @@ export const useClassNotifications = (data) => {
         };
       }
 
+      const prevCurrentInfo = currentRef.current;
       currentRef.current = currentInfo;
       setCurrent(currentInfo);
       setNext(nextInfo);
 
       if (notificationPermission() !== 'granted') return;
 
+      // Class just started.
       if (currentInfo && notifiedNowKeyRef.current !== currentInfo.key) {
         showAppNotification({
           title: `Now: ${currentInfo.abbr}`,
           body: `${currentInfo.room} · Ends ${currentInfo.endLabel}`,
           tag: 'now-class',
           data: { key: currentInfo.key },
-          actions: [{ action: 'ended', title: 'Class ended' }],
+          actions: [{ action: 'ended', title: 'End Class' }],
         });
         notifiedNowKeyRef.current = currentInfo.key;
-        notifiedNextKeyRef.current = null;
       }
 
-      if (!currentInfo && nextInfo) {
-        const isNewNext = notifiedNextKeyRef.current !== nextInfo.key;
-        if (isNewNext) {
-          showAppNotification({
-            title: `Next class in ${formatCountdown(nextInfo.minutesLeft)}`,
-            body: `${nextInfo.abbr} · ${nextInfo.room}`,
-            tag: 'next-class',
-            data: { key: nextInfo.key },
-          });
-          notifiedNextKeyRef.current = nextInfo.key;
-          dismissedNextRef.current.delete(nextInfo.key);
-          tenMinFiredRef.current.delete(nextInfo.key);
-          if (nextInfo.minutesLeft <= 10) tenMinFiredRef.current.add(nextInfo.key);
-        } else if (
-          dismissedNextRef.current.has(nextInfo.key) &&
-          nextInfo.minutesLeft <= 10 &&
-          !tenMinFiredRef.current.has(nextInfo.key)
-        ) {
-          showAppNotification({
-            title: `Next class in ${formatCountdown(nextInfo.minutesLeft)}`,
-            body: `${nextInfo.abbr} · ${nextInfo.room}`,
-            tag: 'next-class',
-            data: { key: nextInfo.key },
-          });
-          tenMinFiredRef.current.add(nextInfo.key);
+      // 30 / 10 / 5 minutes left in the class that's happening right now.
+      if (currentInfo) {
+        const prevDiff = endingSoonDiffRef.current.get(currentInfo.key);
+        endingSoonDiffRef.current.set(currentInfo.key, currentInfo.minutesLeft);
+        if (prevDiff !== undefined) {
+          const crossed = REMINDER_CHECKPOINTS.find((t) => prevDiff > t && currentInfo.minutesLeft <= t);
+          if (crossed) {
+            showAppNotification({
+              title: `${currentInfo.abbr} ends in ${formatCountdown(currentInfo.minutesLeft)}`,
+              body: currentInfo.room,
+              tag: 'ending-soon',
+              data: { key: currentInfo.key, checkpoint: crossed },
+            });
+          }
         }
+      } else {
+        endingSoonDiffRef.current.clear();
+      }
+
+      // Current class just ended and there's another one later today.
+      if (!currentInfo && prevCurrentInfo && nextInfo && notifiedEndedKeyRef.current !== prevCurrentInfo.key) {
+        showAppNotification({
+          title: `${prevCurrentInfo.abbr} ended`,
+          body: `Next: ${nextInfo.abbr} at ${nextInfo.startLabel} · ${nextInfo.room}`,
+          tag: 'next-class',
+          data: { key: nextInfo.key },
+        });
+        notifiedEndedKeyRef.current = prevCurrentInfo.key;
+      }
+
+      // 30 / 10 / 5 minutes until the next class starts (covers both a gap
+      // after the current class ended and simply not having started a first
+      // class yet today).
+      if (!currentInfo && nextInfo) {
+        const prevDiff = startingSoonDiffRef.current.get(nextInfo.key);
+        startingSoonDiffRef.current.set(nextInfo.key, nextInfo.minutesLeft);
+        if (prevDiff !== undefined) {
+          const crossed = REMINDER_CHECKPOINTS.find((t) => prevDiff > t && nextInfo.minutesLeft <= t);
+          if (crossed) {
+            showAppNotification({
+              title: `${nextInfo.abbr} starts in ${formatCountdown(nextInfo.minutesLeft)}`,
+              body: nextInfo.room,
+              tag: 'next-class',
+              data: { key: nextInfo.key, checkpoint: crossed },
+            });
+          }
+        }
+      } else if (!nextInfo) {
+        startingSoonDiffRef.current.clear();
       }
 
       if (!currentInfo && !nextInfo) {
         notifiedNowKeyRef.current = null;
+        notifiedEndedKeyRef.current = null;
       }
     };
 
