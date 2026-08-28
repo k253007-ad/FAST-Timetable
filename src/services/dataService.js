@@ -4,8 +4,13 @@
 // per-day tab; each tab is fetched by name (gviz `sheet=` param, no gid
 // needed) as a JSONP payload, unwrapped, and flattened into
 // { Course, Section, Instructor, Room, Day, Time } records. A second,
-// optional roll-number sheet (added 2026-08-25) is fetched the same way and
-// merged in — see fetchRollNumbers below and the merge step in fetchData.
+// optional roll-number sheet (added 2026-08-25, reworked 2026-08-27) is
+// fetched the same way — see fetchRollNumbers below — but only ever carries
+// each student's Course-short-code + Section list, never Day/Time/Room of
+// its own; those get looked up live against the master timetable above by
+// Course+Section, same as every other selection mode.
+
+import { buildCourseCodeMap } from '../utils/schedule.js';
 
 const API_META_URL = '/api/data';
 
@@ -14,6 +19,12 @@ const API_META_URL = '/api/data';
  * Expected format:
  *   COURSE-CODE(Section)
  *   Instructor Name
+ *
+ * A course name can itself contain parentheses (e.g. "Understanding
+ * Sirat-Un-Nabi (PBUH)(BCS-1K)") — the Section is always the LAST
+ * parenthesized group, not the first, so only that one gets stripped from
+ * the course text. Taking the first group here used to misread "(PBUH)" as
+ * the section and leave the real section baked into the course name.
  */
 const parseCellValue = (cellValue) => {
   if (!cellValue) {
@@ -23,10 +34,16 @@ const parseCellValue = (cellValue) => {
   const courseAndSection = parts[0] || '';
   const instructor = (parts[1] || 'N/A').trim();
 
-  const sectionMatch = courseAndSection.match(/\(([^)]+)\)/);
+  const parenGroups = [...courseAndSection.matchAll(/\(([^)]+)\)/g)];
+  const sectionMatch = parenGroups[parenGroups.length - 1];
   const section = sectionMatch ? sectionMatch[1].trim() : 'N/A';
 
-  const course = courseAndSection.replace(/\s*\([^)]+\)/, '').trim();
+  const course = sectionMatch
+    ? (
+        courseAndSection.slice(0, sectionMatch.index) +
+        courseAndSection.slice(sectionMatch.index + sectionMatch[0].length)
+      ).trim()
+    : courseAndSection.trim();
 
   return { course, section, instructor };
 };
@@ -98,14 +115,23 @@ const fetchSheet = async (sheetUrl, sheetInfo) => {
   }
 };
 
+// Matches "SHORTCODE (Section)", e.g. "COAL-Lab (BSE-3B)" -> code
+// "COAL-Lab", section "BSE-3B".
+const ROLL_ENTRY_PATTERN = /^(.+?)\s*\(([^)]+)\)$/;
+
 /**
- * Fetches the flat roll-number sheet: one row per class a specific student
- * takes, columns RollNo | Day | Time | Course | Section | Instructor | Room
- * (built offline from the university's per-student PDF — see workspace root
- * TASK_roll_number_mode.md). Unlike the day tabs this isn't a Room×Time
- * grid, so it's parsed by header name instead of fixed row/column offsets.
+ * Fetches the compact roll-number sheet: one row per student — column A the
+ * roll number, every other column in that row one "SHORTCODE (Section)"
+ * cell for a course they take (row 0 is a header, skipped; trailing blank
+ * cells are fine since students take different numbers of courses). Codes
+ * are resolved against `codeMap` (buildCourseCodeMap, derived from the
+ * master sheet's own course names) back to the exact course string
+ * buildSchedule matches on. A code the map doesn't recognize is dropped
+ * with a console warning rather than injected as a broken entry — most
+ * likely a typo in the sheet or the master sheet's course list changed
+ * since the code was written down.
  */
-const fetchRollNumbers = async (url) => {
+const fetchRollNumbers = async (url, codeMap) => {
   try {
     const response = await fetch(url);
     if (!response.ok) {
@@ -122,36 +148,29 @@ const fetchRollNumbers = async (url) => {
     const rows = json?.table?.rows;
     if (!Array.isArray(rows) || rows.length < 2) return [];
 
-    const headers = rows[0].c.map((cell) => (cell?.v || '').toString().trim());
-    const idx = {
-      RollNo: headers.indexOf('RollNo'),
-      Day: headers.indexOf('Day'),
-      Time: headers.indexOf('Time'),
-      Course: headers.indexOf('Course'),
-      Section: headers.indexOf('Section'),
-      Instructor: headers.indexOf('Instructor'),
-      Room: headers.indexOf('Room'),
-    };
-    if (Object.values(idx).some((i) => i === -1)) {
-      console.error('Roll-number sheet is missing an expected column.', headers);
-      return [];
-    }
-
     const entries = [];
     for (let i = 1; i < rows.length; i++) {
-      const cells = rows[i].c;
-      const get = (colIdx) => (cells[colIdx]?.v ?? '').toString().trim();
-      const rollNo = get(idx.RollNo);
+      const cells = rows[i].c || [];
+      const rollNo = (cells[0]?.v ?? '').toString().trim();
       if (!rollNo) continue;
-      entries.push({
-        RollNo: rollNo,
-        Day: get(idx.Day),
-        Time: get(idx.Time),
-        Course: get(idx.Course),
-        Section: get(idx.Section),
-        Instructor: get(idx.Instructor) || 'N/A',
-        Room: get(idx.Room) || 'N/A',
-      });
+
+      for (let col = 1; col < cells.length; col++) {
+        const raw = (cells[col]?.v ?? '').toString().trim();
+        if (!raw) continue;
+
+        const match = raw.match(ROLL_ENTRY_PATTERN);
+        if (!match) {
+          console.warn(`Roll-number sheet: couldn't parse "${raw}" for ${rollNo}`);
+          continue;
+        }
+        const [, code, section] = match;
+        const course = codeMap.get(code.trim());
+        if (!course) {
+          console.warn(`Roll-number sheet: unknown course code "${code}" for ${rollNo}`);
+          continue;
+        }
+        entries.push({ RollNo: rollNo, Course: course, Section: section.trim() });
+      }
     }
     return entries;
   } catch (error) {
@@ -211,46 +230,14 @@ export const fetchData = async () => {
   }
 
   // Step 3: roll-number sheet (optional — `rollNumbers` is null until the user uploads it,
-  // see api/sheetConfig.js). Entries that describe a class the master sheet already has
-  // aren't duplicated into `timetable` — selecting that course/section just reuses the
-  // existing entry. Only entries the master sheet is missing (its own data-quality gaps, or
-  // timing drift between the two sources) get added, so every roll number's classes always
-  // resolve to something renderable, and a duplicate never gets double-counted as a false
-  // clash by buildSchedule.
-  //
-  // A "session" is identified by (Section, Day, Time) only — deliberately NOT
-  // Course/Room/Instructor text. The roll-number sheet was built offline, once, by
-  // snapshotting the master sheet's text; the live master sheet is a moving target (it's
-  // already been reverted once mid-project), so Room/Instructor formatting can drift between
-  // extraction time and whenever a user's browser actually fetches both sheets. Comparing
-  // that text directly caused real false negatives (e.g. a Room string differing only in
-  // spacing) — the row would slip past this check, get appended as a "new" entry, and
-  // buildSchedule (schedule.js) flags any cell with more than one entry as a clash
-  // unconditionally, so the student's own class showed up flagged as clashing with itself.
-  // Section+Day+Time is far more stable than the display text, and a section can't
-  // legitimately meet twice at once, so it's a safe identity key.
+  // see api/sheetConfig.js). Compact format: RollNo + a list of "SHORTCODE (Section)" cells,
+  // no Day/Time/Room/Instructor of its own — codes are resolved against the master sheet's
+  // own course names (buildCourseCodeMap) and every session detail comes live from
+  // `allTimetableData` by Course+Section, exactly like Teacher/Section mode already do.
+  const courseCodeMap = buildCourseCodeMap(allTimetableData);
   const rollNumberEntries = metaJson.karachi.rollNumbers
-    ? await fetchRollNumbers(metaJson.karachi.rollNumbers.url)
+    ? await fetchRollNumbers(metaJson.karachi.rollNumbers.url, courseCodeMap)
     : [];
-
-  const sessionKey = (item) => `${item.Section}|${item.Day}|${item.Time}`;
-  const masterKeys = new Set(allTimetableData.map(sessionKey));
-
-  rollNumberEntries.forEach((item) => {
-    if (item.Day === 'Saturday') return;
-    const key = sessionKey(item);
-    if (masterKeys.has(key)) return;
-    masterKeys.add(key);
-    allTimeSlots.add(item.Time);
-    allTimetableData.push({
-      Course: item.Course,
-      Section: item.Section,
-      Instructor: item.Instructor,
-      Room: item.Room,
-      Day: item.Day,
-      Time: item.Time,
-    });
-  });
 
   return {
     timetable: allTimetableData,

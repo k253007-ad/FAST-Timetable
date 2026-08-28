@@ -214,7 +214,7 @@ export const useClassNotifications = (data) => {
           const crossed = REMINDER_CHECKPOINTS.find((t) => prevDiff > t && nextInfo.minutesLeft <= t);
           if (crossed) {
             showAppNotification({
-              title: `${nextInfo.abbr} starts in ${formatCountdown(nextInfo.minutesLeft)}`,
+              title: `${nextInfo.abbr} starts at ${nextInfo.startLabel}`,
               body: nextInfo.room,
               tag: 'next-class',
               data: { key: nextInfo.key, checkpoint: crossed },

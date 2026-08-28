@@ -93,7 +93,7 @@ const NowNext = ({ data, selectedClasses, isMainProfile, onClassEnded, manualEnd
               onClick={onClassEnded}
               title="Mark this class as ended early — switches your notifications to the next class"
             >
-              Class ended
+              End Class
             </button>
           )}
         </div>

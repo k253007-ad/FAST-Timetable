@@ -50,6 +50,64 @@ export const abbreviateCourse = (name) => {
   return words.map((w) => w[0].toUpperCase()).join('');
 };
 
+/**
+ * Deterministic SHORTCODE -> full course name map, derived from the master
+ * timetable's own course names (e.g. "Data Structures" -> "DS",
+ * "Computer Organization and Assembly Language" -> "COAL"). Unlike
+ * abbreviateCourse above, a lab keeps its lecture's code plus a "-Lab"
+ * suffix instead of collapsing to the same code (matches the sheet's own
+ * "- Lab" naming), and two different courses that happen to abbreviate to
+ * the same code get disambiguated by appending 2, 3, ... to every course
+ * after the first — this has to be a stable 1:1 map, not just a display
+ * label. Ranked by session count (how many timetable rows that course name
+ * appears in) so the plain, unsuffixed code goes to whichever course is
+ * actually more common — e.g. "DS" resolves to "Data Structures" (a
+ * mandatory course meeting dozens of times a week) rather than "Data
+ * Science" (an elective meeting a handful of times), which is what anyone
+ * writing "DS" in the compact roll-number sheet almost certainly means.
+ * Ties fall back to alphabetical for determinism. Used to resolve the
+ * compact roll-number sheet's short codes back to the exact course string
+ * buildSchedule matches on.
+ */
+export const buildCourseCodeMap = (timetable) => {
+  const isLab = (name) => /\s*-\s*lab\s*$/i.test(name);
+  const baseCode = (name) => {
+    const base = name.replace(/\s*-\s*lab\s*$/i, '').trim();
+    // Strip punctuation from each word first — a word like "(PBUH)" would
+    // otherwise contribute its literal "(" as an "initial".
+    const words = base
+      .split(/\s+/)
+      .map((w) => w.replace(/[^A-Za-z0-9]/g, ''))
+      .filter((w) => w && !ABBR_STOPWORDS.has(w.toLowerCase()));
+    let code;
+    if (words.length === 0) code = base.replace(/[^A-Za-z0-9]/g, '').slice(0, 3).toUpperCase();
+    else if (words.length === 1) code = words[0].slice(0, 3).toUpperCase();
+    else code = words.map((w) => w[0].toUpperCase()).join('');
+    return isLab(name) ? `${code}-Lab` : code;
+  };
+
+  const sessionCounts = new Map();
+  timetable.forEach((item) => sessionCounts.set(item.Course, (sessionCounts.get(item.Course) || 0) + 1));
+
+  const uniqueCourses = [...new Set(timetable.map((item) => item.Course))];
+  const byCode = new Map();
+  uniqueCourses.forEach((course) => {
+    const code = baseCode(course);
+    if (!byCode.has(code)) byCode.set(code, []);
+    byCode.get(code).push(course);
+  });
+
+  const codeToCourse = new Map();
+  byCode.forEach((courses, code) => {
+    [...courses]
+      .sort((a, b) => (sessionCounts.get(b) || 0) - (sessionCounts.get(a) || 0) || a.localeCompare(b))
+      .forEach((course, i) => {
+        codeToCourse.set(i === 0 ? code : `${code}${i + 1}`, course);
+      });
+  });
+  return codeToCourse;
+};
+
 // Stable identity for a scheduled cell, shared by useClassNotifications and
 // NowNext so they agree on which session is which without either
 // recomputing the other's logic.
