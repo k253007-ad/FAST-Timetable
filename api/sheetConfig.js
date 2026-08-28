@@ -24,15 +24,16 @@
 const SHEET_ID = '1rRo5Gqu2nqj1K1xzxO-4n8KQmnXq7fx65P4Yz9CkxN0';
 const DAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
 
-// Roll-number selection sheet (added 2026-08-25, wired live the same day) — a
-// separate spreadsheet, one flat tab named ROLL_SHEET_TAB with columns
-// RollNo | Day | Time | Course | Section | Instructor | Room (built by
-// extracting the university's per-student PDF; see workspace root
-// TASK_roll_number_mode.md for the full pipeline). If this ever needs to be
-// unset again (sheet deleted/replaced without a new one ready), set it back
-// to null — getSheetData() then reports rollNumbers: null and the app's Roll
-// No tab shows an unavailable state instead of erroring.
-const ROLL_SHEET_ID = '1JJGeX8KPI305GanliNKKA6FA61Ku-ypFPs_0opKhXD0';
+// Roll-number selection sheet (added 2026-08-25, reworked 2026-08-27 to a
+// compact format) — a separate spreadsheet, one flat tab named
+// ROLL_SHEET_TAB. Compact format: column A the roll number, every other
+// column a "SHORTCODE (Section)" cell — see fetchRollNumbers in
+// src/services/dataService.js and buildCourseCodeMap in
+// src/utils/schedule.js for how codes are generated/resolved. If this ever
+// needs to be unset again (sheet deleted/replaced without a new one ready),
+// set it back to null — getSheetData() then reports rollNumbers: null and
+// the app's Roll No tab shows an unavailable state instead of erroring.
+const ROLL_SHEET_ID = '1-OU7HxwLf7sIc-rtyCUB6Hf7SuMEvyZtD2stFv--DHM';
 const ROLL_SHEET_TAB = 'RollNumbers';
 
 const CACHE_MS = 10 * 60 * 1000; // re-check the tab list at most every 10 minutes
