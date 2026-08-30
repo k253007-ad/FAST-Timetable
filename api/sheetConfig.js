@@ -21,7 +21,7 @@
 // SHEET_ID below. Nothing else needs to change, ever, as long as the day
 // tabs are named Monday..Friday.
 
-const SHEET_ID = '1rRo5Gqu2nqj1K1xzxO-4n8KQmnXq7fx65P4Yz9CkxN0';
+const SHEET_ID = '1nQgZxlhUMc6EXqgZFV38QLGPG34GgDWwjdErzHa3MUk';
 const DAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
 
 // Roll-number selection sheet (added 2026-08-25, reworked 2026-08-27 to a
