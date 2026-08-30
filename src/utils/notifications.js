@@ -6,7 +6,7 @@
 // ServiceWorkerRegistration.showNotification, not the plain Notification
 // constructor) — it does no caching, see public/sw.js.
 
-export const canNotify = () => typeof window !== 'undefined' && 'Notification' in window;
+const canNotify = () => typeof window !== 'undefined' && 'Notification' in window;
 
 export const notificationPermission = () => (canNotify() ? Notification.permission : 'unsupported');
 

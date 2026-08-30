@@ -1,6 +1,168 @@
-import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { splitClassValue, formatClassLabel } from '../utils/courseColors.js';
-import { IconAlert, IconChevronDown, IconSearch, IconX } from './Icons.jsx';
+import {
+  buildMoveOverrides,
+  DAY_ORDER,
+  formatSlot,
+  getAllTimeSlots,
+  getClassOccurrences,
+} from '../utils/schedule.js';
+import { IconAlert, IconChevronDown, IconInfo, IconSearch, IconX } from './Icons.jsx';
+
+// Memoized so toggling one checkbox doesn't force React to re-diff every
+// other row in a list that can run into the hundreds (all courses, unfiltered).
+const CourseOptionRow = memo(({ value, checked, onToggle }) => {
+  const { course, section } = splitClassValue(value);
+  return (
+    <label className={`option-row${checked ? ' is-checked' : ''}`}>
+      <input
+        type="checkbox"
+        className="option-checkbox"
+        value={value}
+        checked={checked}
+        onChange={onToggle}
+      />
+      <span className="option-text">
+        <span className="option-course">{course}</span>
+        {section && <span className="option-section">{section}</span>}
+      </span>
+    </label>
+  );
+});
+CourseOptionRow.displayName = 'CourseOptionRow';
+
+// The single right-side icon slot shared by both search boxes: a plain
+// search icon while empty, or a clear (X) button the instant there's a
+// query — no focus-dependent delay, so it's never a beat behind what you
+// just typed. Dismissing the mobile keyboard is handled separately by the
+// input itself (type="search" + enterKeyHint="search" + blur-on-Enter below),
+// not by this icon.
+const SearchAction = ({ query, onClear }) => {
+  if (!query) {
+    return (
+      <span className="combobox-action" aria-hidden="true">
+        <IconSearch size={17} />
+      </span>
+    );
+  }
+  return (
+    <button type="button" className="combobox-action combobox-action-btn" aria-label="Clear search" onClick={onClear}>
+      <IconX size={15} />
+    </button>
+  );
+};
+
+// Shared by both info popovers (reschedule + extra-class) below — closes on
+// a pointerdown outside `ref`'s element or on Escape.
+const useDismissOnOutside = (isOpen, onClose, ref) => {
+  useEffect(() => {
+    if (!isOpen) return undefined;
+    const onPointerDown = (e) => {
+      if (ref.current && !ref.current.contains(e.target)) onClose();
+    };
+    const onKeyDown = (e) => {
+      if (e.key === 'Escape') onClose();
+    };
+    document.addEventListener('pointerdown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [isOpen, onClose, ref]);
+};
+
+// Rendering the full unfiltered list (800+ courses) as real DOM nodes is the
+// actual source of occasional lag when the dropdown first opens or the
+// search is cleared back to empty — capping how many rows mount at once
+// keeps that instant regardless of device, and narrowing the search below
+// this threshold reveals the rest immediately (nothing is hidden, just not
+// rendered until it's relevant).
+const MAX_VISIBLE_RESULTS = 60;
+
+const GroupOptionRow = memo(({ name, count, checked, onToggle }) => (
+  <label className={`option-row${checked ? ' is-checked' : ''}`}>
+    <input
+      type="checkbox"
+      className="option-checkbox"
+      value={name}
+      checked={checked}
+      onChange={onToggle}
+    />
+    <span className="option-text">
+      <span className="option-course">{name}</span>
+      <span className="option-section">
+        {count} class{count === 1 ? '' : 'es'}
+      </span>
+    </span>
+  </label>
+));
+GroupOptionRow.displayName = 'GroupOptionRow';
+
+// One row in the "Adjust class times" panel — a single (Course, Section,
+// Day) occurrence with its official time, an active override's "moved to"
+// time if any, and the day/slot pickers to set or change one. Its own local
+// `day`/`slot` state is the *pending* pick — nothing happens until "Move" is
+// clicked, so browsing the dropdowns doesn't touch the real schedule.
+const RescheduleRow = ({ occurrence, timeSlots, activeOverride, onMove, onReset }) => {
+  const officialStart = formatSlot(occurrence.slots[0]).start;
+  const officialEnd = formatSlot(occurrence.slots[occurrence.slots.length - 1]).end;
+  const [day, setDay] = useState(activeOverride ? activeOverride.newDay : occurrence.day);
+  const [slot, setSlot] = useState(activeOverride ? activeOverride.newTime : occurrence.slots[0]);
+
+  return (
+    <div className="reschedule-row">
+      <div className="reschedule-info">
+        <span className="reschedule-course">
+          {occurrence.course}
+          {occurrence.section !== 'N/A' && ` (${occurrence.section})`}
+        </span>
+        <span className="reschedule-official">
+          Official: {occurrence.day}, {officialStart}–{officialEnd}
+        </span>
+        {activeOverride && (
+          <span className="reschedule-moved">
+            Moved to {activeOverride.newDay}, {formatSlot(activeOverride.newTime).start}
+          </span>
+        )}
+      </div>
+      <div className="reschedule-controls">
+        <select
+          className="reschedule-select"
+          value={day}
+          onChange={(e) => setDay(e.target.value)}
+          aria-label={`New day for ${occurrence.course}`}
+        >
+          {DAY_ORDER.map((d) => (
+            <option key={d} value={d}>
+              {d}
+            </option>
+          ))}
+        </select>
+        <select
+          className="reschedule-select"
+          value={slot}
+          onChange={(e) => setSlot(e.target.value)}
+          aria-label={`New time slot for ${occurrence.course}`}
+        >
+          {timeSlots.map((s, i) => (
+            <option key={s} value={s}>
+              {`Slot ${i + 1} · ${formatSlot(s).start}`}
+            </option>
+          ))}
+        </select>
+        <button type="button" className="link-button" onClick={() => onMove(day, slot)}>
+          {activeOverride ? 'Update' : 'Move'}
+        </button>
+        {activeOverride && (
+          <button type="button" className="link-button" onClick={onReset}>
+            Reset
+          </button>
+        )}
+      </div>
+    </div>
+  );
+};
 
 /**
  * Searchable multi-select for course sections, with the current selection
@@ -12,17 +174,21 @@ import { IconAlert, IconChevronDown, IconSearch, IconX } from './Icons.jsx';
  * Section was dropped entirely at first in favor of the more precise Roll No
  * pick, then added back as its own tab on 2026-08-26 since some students
  * just want "everything BCS-3A takes" rather than one specific student):
- *  - Manual: pick individual course sections one at a time (original flow).
+ *  - Course (labelled "Manual" internally — `mode` stays `'manual'`, only the
+ *    tab's visible text changed 2026-08-30): pick individual course sections
+ *    one at a time (original flow).
  *  - Roll No: pick a specific student's roll number (e.g. "25K-3068") and
  *    every class *that student* takes is added/removed as a group — built
  *    from `data.rollNumbers`, a separate optional data source (see
  *    dataService.js). More precise than section-based selection since
  *    electives vary per student even within the same nominal section.
- *  - Teacher: pick a teacher name and every class they teach is added/
- *    removed as a group — built from `data.timetable`, same as before.
  *  - Section: pick a section/cohort code (e.g. "BCS-3A") and every class
  *    tagged with that section is added/removed as a group — built from
- *    `data.timetable`, same underlying mechanism as Teacher.
+ *    `data.timetable`.
+ *  - Teacher: pick a teacher name and every class they teach is added/
+ *    removed as a group — built from `data.timetable`, same underlying
+ *    mechanism as Section. (Tab order: Course, Roll No, Section, Teacher —
+ *    changed 2026-08-30 per user request.)
  *
  * The card can also be minimized (collapses everything but the minimize
  * button + profile toolbar — the mode tabs collapse too), and holds up to
@@ -35,6 +201,10 @@ const ClassSelector = ({
   allClasses,
   selectedClasses,
   setSelectedClasses,
+  overrides,
+  setOverrides,
+  extraClasses,
+  setExtraClasses,
   courseColors,
   activeProfile,
   profileCount,
@@ -45,12 +215,25 @@ const ClassSelector = ({
   const [groupQuery, setGroupQuery] = useState(''); // shared search box for roll no / teacher / section tabs
   const [open, setOpen] = useState(false);
   const [minimized, setMinimized] = useState(false);
-  const rootRef = useRef(null);
+  const [showReschedule, setShowReschedule] = useState(false);
+  const [showRescheduleInfo, setShowRescheduleInfo] = useState(false);
+  const [moveError, setMoveError] = useState('');
+  const [showExtra, setShowExtra] = useState(false);
+  const [showExtraInfo, setShowExtraInfo] = useState(false);
+  const [extraCourseValue, setExtraCourseValue] = useState('');
+  const [extraDay, setExtraDay] = useState(DAY_ORDER[0]);
+  const [extraSlot, setExtraSlot] = useState('');
+  const [extraError, setExtraError] = useState('');
   const comboboxRef = useRef(null);
   const inputRef = useRef(null);
   const groupInputRef = useRef(null);
+  const rescheduleInfoRef = useRef(null);
+  const extraInfoRef = useRef(null);
   const panelId = useId();
   const groupPanelId = useId();
+
+  useDismissOnOutside(showRescheduleInfo, () => setShowRescheduleInfo(false), rescheduleInfoRef);
+  useDismissOnOutside(showExtraInfo, () => setShowExtraInfo(false), extraInfoRef);
 
   // Close on outside click / Escape while the dropdown is open. "Outside"
   // means outside the search box + its panel — not just outside the whole
@@ -88,14 +271,104 @@ const ClassSelector = ({
     });
   }, [allClasses, query]);
 
-  const toggleClass = (value) => {
-    setSelectedClasses((prev) =>
-      prev.includes(value) ? prev.filter((v) => v !== value) : [...prev, value]
-    );
-  };
+  // A stable callback (reads the toggled value off the event instead of
+  // closing over it per-row) so every row can share one function reference —
+  // required for CourseOptionRow's memo to actually skip re-rendering rows
+  // whose checked state didn't change, which matters once `allClasses` runs
+  // into the hundreds.
+  const handleToggleClass = useCallback(
+    (e) => {
+      const { value } = e.target;
+      setSelectedClasses((prev) =>
+        prev.includes(value) ? prev.filter((v) => v !== value) : [...prev, value]
+      );
+    },
+    [setSelectedClasses]
+  );
 
   const removeClass = (value) => {
     setSelectedClasses((prev) => prev.filter((v) => v !== value));
+  };
+
+  // "Adjust class times" — manual per-device overrides for when the shared
+  // sheet hasn't caught up with a real schedule change yet (see
+  // utils/schedule.js). `occurrences` is always built from the *official*
+  // schedule so an occurrence's identity never shifts out from under an
+  // existing override — see getClassOccurrences's own doc comment.
+  const timeSlots = useMemo(() => getAllTimeSlots(data), [data]);
+  const occurrences = useMemo(() => getClassOccurrences(data, selectedClasses), [data, selectedClasses]);
+
+  const findActiveOverride = (occurrence) =>
+    overrides.find(
+      (o) =>
+        o.course === occurrence.course &&
+        o.section === occurrence.section &&
+        o.day === occurrence.day &&
+        o.time === occurrence.slots[0]
+    );
+
+  // A course can meet more than once on the same day (e.g. a lecture plus a
+  // separately-scheduled lab) — those are two distinct occurrences sharing
+  // (course, section, day), so matching/removing overrides must also check
+  // the occurrence's own original slots, not just the day, or moving one
+  // would silently wipe out an override on the other.
+  const belongsToOccurrence = (o, occurrence) =>
+    o.course === occurrence.course &&
+    o.section === occurrence.section &&
+    o.day === occurrence.day &&
+    occurrence.slots.includes(o.time);
+
+  const handleMove = (occurrence, newDay, newStartSlot) => {
+    const entries = buildMoveOverrides(occurrence, timeSlots, newDay, newStartSlot);
+    if (!entries) {
+      setMoveError(`Not enough time slots left in ${newDay} to fit this class.`);
+      return;
+    }
+    setMoveError('');
+    setOverrides((prev) => [...prev.filter((o) => !belongsToOccurrence(o, occurrence)), ...entries]);
+  };
+
+  const handleResetMove = (occurrence) => {
+    setOverrides((prev) => prev.filter((o) => !belongsToOccurrence(o, occurrence)));
+  };
+
+  // "Add extra class" — a one-off session on top of the recurring schedule
+  // (a makeup class, an extra revision lecture) for just this week, picked
+  // from an already-selected course. There's no calendar/date model here —
+  // it's a recurring weekly grid — so "just this week" is on the student to
+  // remove once it's no longer relevant, not something the app tracks.
+  //
+  // Both pickers fall back to a computed default rather than syncing one via
+  // an effect: the course/slot lists only exist once data loads, and a
+  // previously-picked course can disappear if it's removed from the
+  // selection — deriving the effective value at render time keeps the
+  // `<select>` always pointed at something valid without an extra render
+  // pass.
+  const effectiveExtraCourse = selectedClasses.includes(extraCourseValue)
+    ? extraCourseValue
+    : selectedClasses[0] || '';
+  const effectiveExtraSlot = timeSlots.includes(extraSlot) ? extraSlot : timeSlots[0] || '';
+
+  const handleAddExtra = () => {
+    if (!effectiveExtraCourse || !effectiveExtraSlot) return;
+    const { course, section } = splitClassValue(effectiveExtraCourse);
+    const alreadyAdded = extraClasses.some(
+      (e) => e.course === course && e.section === section && e.day === extraDay && e.time === effectiveExtraSlot
+    );
+    if (alreadyAdded) {
+      setExtraError('That class is already added for this day and slot.');
+      return;
+    }
+    setExtraError('');
+    setExtraClasses((prev) => [...prev, { course, section, day: extraDay, time: effectiveExtraSlot }]);
+  };
+
+  const handleRemoveExtra = (extra) => {
+    setExtraClasses((prev) =>
+      prev.filter(
+        (e) => !(e.course === extra.course && e.section === extra.section && e.day === extra.day && e.time === extra.time)
+      )
+    );
   };
 
   const hasData = allClasses.length > 0;
@@ -157,13 +430,22 @@ const ClassSelector = ({
 
   const isGroupSelected = (classes) => classes.length > 0 && classes.every((c) => selectedClasses.includes(c));
 
-  const toggleGroup = (classes) => {
-    setSelectedClasses((prev) => {
-      const allSelected = classes.every((c) => prev.includes(c));
-      if (allSelected) return prev.filter((c) => !classes.includes(c));
-      return [...new Set([...prev, ...classes])];
-    });
-  };
+  // Same stable-callback approach as handleToggleClass above: the checkbox's
+  // own `value` (the group name) is looked up in `groups` inside the handler,
+  // so GroupOptionRow's memo can skip re-rendering unaffected rows.
+  const handleToggleGroup = useCallback(
+    (e) => {
+      const group = groups.find((g) => g.name === e.target.value);
+      if (!group) return;
+      const { classes } = group;
+      setSelectedClasses((prev) => {
+        const allSelected = classes.every((c) => prev.includes(c));
+        if (allSelected) return prev.filter((c) => !classes.includes(c));
+        return [...new Set([...prev, ...classes])];
+      });
+    },
+    [groups, setSelectedClasses]
+  );
 
   const switchMode = (nextMode) => {
     setMode(nextMode);
@@ -195,8 +477,8 @@ const ClassSelector = ({
     mode === 'rollno' ? 'Search roll numbers' : mode === 'section' ? 'Search sections' : 'Search instructors';
 
   return (
-    <section className="card selector-card no-print" ref={rootRef}>
-      <div className="data-disclaimer" role="note">
+    <>
+      <div className="data-disclaimer no-print" role="note">
         <IconAlert size={15} />
         <span>
           This is an unofficial tool maintained independently by a student. Since
@@ -205,6 +487,7 @@ const ClassSelector = ({
         </span>
       </div>
 
+      <section className="card selector-card no-print">
       <div className="selector-head">
         <h2 className="selector-title">My classes</h2>
         {selectedClasses.length > 0 && (
@@ -218,47 +501,6 @@ const ClassSelector = ({
       </div>
 
       <div className="selector-toolbar">
-        {!minimized && (
-          <div className="mode-tabs" role="tablist" aria-label="Selection mode">
-            <button
-              type="button"
-              role="tab"
-              aria-selected={mode === 'manual'}
-              className={`mode-tab${mode === 'manual' ? ' is-active' : ''}`}
-              onClick={() => switchMode('manual')}
-            >
-              Manual
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={mode === 'rollno'}
-              className={`mode-tab${mode === 'rollno' ? ' is-active' : ''}`}
-              onClick={() => switchMode('rollno')}
-            >
-              Roll No
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={mode === 'teacher'}
-              className={`mode-tab${mode === 'teacher' ? ' is-active' : ''}`}
-              onClick={() => switchMode('teacher')}
-            >
-              Teacher
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={mode === 'section'}
-              className={`mode-tab${mode === 'section' ? ' is-active' : ''}`}
-              onClick={() => switchMode('section')}
-            >
-              Section
-            </button>
-          </div>
-        )}
-
         <div className="toolbar-secondary">
           <button
             type="button"
@@ -287,18 +529,57 @@ const ClassSelector = ({
             ))}
           </div>
         </div>
+
+        {!minimized && (
+          <div className="mode-tabs" role="tablist" aria-label="Selection mode">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={mode === 'manual'}
+              className={`mode-tab${mode === 'manual' ? ' is-active' : ''}`}
+              onClick={() => switchMode('manual')}
+            >
+              Course
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={mode === 'rollno'}
+              className={`mode-tab${mode === 'rollno' ? ' is-active' : ''}`}
+              onClick={() => switchMode('rollno')}
+            >
+              Roll No
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={mode === 'section'}
+              className={`mode-tab${mode === 'section' ? ' is-active' : ''}`}
+              onClick={() => switchMode('section')}
+            >
+              Section
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={mode === 'teacher'}
+              className={`mode-tab${mode === 'teacher' ? ' is-active' : ''}`}
+              onClick={() => switchMode('teacher')}
+            >
+              Teacher
+            </button>
+          </div>
+        )}
       </div>
 
       {!minimized && mode === 'manual' && (
         <div className="combobox" ref={comboboxRef}>
-          <span className="combobox-icon">
-            <IconSearch size={17} />
-          </span>
           <input
             ref={inputRef}
-            type="text"
+            type="search"
+            enterKeyHint="search"
             className="combobox-input"
-            placeholder={hasData ? 'Search - e.g “CS2005 or BSE-5A”' : 'No sections available'}
+            placeholder={hasData ? 'Search course name' : 'No courses available'}
             value={query}
             disabled={!hasData}
             onChange={(e) => {
@@ -307,56 +588,49 @@ const ClassSelector = ({
             }}
             onFocus={() => setOpen(true)}
             onClick={() => setOpen(true)}
+            onKeyDown={(e) => {
+              // The mobile keyboard's "Search" action key (from
+              // enterKeyHint="search" below) sends Enter — dismiss the
+              // keyboard while leaving the results panel open (blur doesn't
+              // trigger the outside-pointerdown listener that closes it).
+              if (e.key === 'Enter') e.target.blur();
+            }}
             role="combobox"
             aria-expanded={open}
             aria-controls={panelId}
-            aria-label="Search course sections"
+            aria-label="Search courses"
             autoComplete="off"
             spellCheck="false"
           />
-          {query && (
-            <button
-              type="button"
-              className="combobox-clear"
-              aria-label="Clear search"
-              onClick={() => {
-                setQuery('');
-                inputRef.current?.focus();
-              }}
-            >
-              <IconX size={15} />
-            </button>
-          )}
+          <SearchAction
+            query={query}
+            onClear={() => {
+              setQuery('');
+              inputRef.current?.focus();
+            }}
+          />
 
           {open && hasData && (
-            <div className="combobox-panel" id={panelId} role="group" aria-label="Matching sections">
+            <div className="combobox-panel" id={panelId} role="group" aria-label="Matching courses">
               <div className="combobox-meta">
-                {filtered.length === allClasses.length
-                  ? `${allClasses.length} sections`
-                  : `${filtered.length} of ${allClasses.length} sections`}
+                {filtered.length > MAX_VISIBLE_RESULTS
+                  ? `Showing ${MAX_VISIBLE_RESULTS} of ${filtered.length} — keep typing to narrow`
+                  : filtered.length === allClasses.length
+                    ? `${allClasses.length} courses`
+                    : `${filtered.length} of ${allClasses.length} courses`}
               </div>
               <div className="combobox-list">
                 {filtered.length === 0 ? (
-                  <div className="combobox-empty">No sections match “{query}”.</div>
+                  <div className="combobox-empty">No courses match “{query}”.</div>
                 ) : (
-                  filtered.map((value) => {
-                    const { course, section } = splitClassValue(value);
-                    const checked = selectedClasses.includes(value);
-                    return (
-                      <label key={value} className={`option-row${checked ? ' is-checked' : ''}`}>
-                        <input
-                          type="checkbox"
-                          className="option-checkbox"
-                          checked={checked}
-                          onChange={() => toggleClass(value)}
-                        />
-                        <span className="option-text">
-                          <span className="option-course">{course}</span>
-                          {section && <span className="option-section">{section}</span>}
-                        </span>
-                      </label>
-                    );
-                  })
+                  filtered.slice(0, MAX_VISIBLE_RESULTS).map((value) => (
+                    <CourseOptionRow
+                      key={value}
+                      value={value}
+                      checked={selectedClasses.includes(value)}
+                      onToggle={handleToggleClass}
+                    />
+                  ))
                 )}
               </div>
             </div>
@@ -375,12 +649,10 @@ const ClassSelector = ({
         (mode === 'rollno' || mode === 'teacher' || mode === 'section') &&
         (mode !== 'rollno' || hasRollData) && (
         <div className="combobox" ref={comboboxRef}>
-          <span className="combobox-icon">
-            <IconSearch size={17} />
-          </span>
           <input
             ref={groupInputRef}
-            type="text"
+            type="search"
+            enterKeyHint="search"
             className="combobox-input"
             placeholder={groupPlaceholder}
             value={groupQuery}
@@ -391,6 +663,9 @@ const ClassSelector = ({
             }}
             onFocus={() => setOpen(true)}
             onClick={() => setOpen(true)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') e.target.blur();
+            }}
             role="combobox"
             aria-expanded={open}
             aria-controls={groupPanelId}
@@ -398,19 +673,13 @@ const ClassSelector = ({
             autoComplete="off"
             spellCheck="false"
           />
-          {groupQuery && (
-            <button
-              type="button"
-              className="combobox-clear"
-              aria-label="Clear search"
-              onClick={() => {
-                setGroupQuery('');
-                groupInputRef.current?.focus();
-              }}
-            >
-              <IconX size={15} />
-            </button>
-          )}
+          <SearchAction
+            query={groupQuery}
+            onClear={() => {
+              setGroupQuery('');
+              groupInputRef.current?.focus();
+            }}
+          />
 
           {open && hasData && (
             <div
@@ -420,9 +689,11 @@ const ClassSelector = ({
               aria-label={groupAriaLabel}
             >
               <div className="combobox-meta">
-                {filteredGroups.length === groups.length
-                  ? `${groups.length} ${groupUnitLabel}`
-                  : `${filteredGroups.length} of ${groups.length} ${groupUnitLabel}`}
+                {filteredGroups.length > MAX_VISIBLE_RESULTS
+                  ? `Showing ${MAX_VISIBLE_RESULTS} of ${filteredGroups.length} — keep typing to narrow`
+                  : filteredGroups.length === groups.length
+                    ? `${groups.length} ${groupUnitLabel}`
+                    : `${filteredGroups.length} of ${groups.length} ${groupUnitLabel}`}
               </div>
               <div className="combobox-list">
                 {filteredGroups.length === 0 ? (
@@ -430,25 +701,15 @@ const ClassSelector = ({
                     No {groupUnitLabel} match “{groupQuery}”.
                   </div>
                 ) : (
-                  filteredGroups.map((group) => {
-                    const checked = isGroupSelected(group.classes);
-                    return (
-                      <label key={group.name} className={`option-row${checked ? ' is-checked' : ''}`}>
-                        <input
-                          type="checkbox"
-                          className="option-checkbox"
-                          checked={checked}
-                          onChange={() => toggleGroup(group.classes)}
-                        />
-                        <span className="option-text">
-                          <span className="option-course">{group.name}</span>
-                          <span className="option-section">
-                            {group.classes.length} class{group.classes.length === 1 ? '' : 'es'}
-                          </span>
-                        </span>
-                      </label>
-                    );
-                  })
+                  filteredGroups.slice(0, MAX_VISIBLE_RESULTS).map((group) => (
+                    <GroupOptionRow
+                      key={group.name}
+                      name={group.name}
+                      count={group.classes.length}
+                      checked={isGroupSelected(group.classes)}
+                      onToggle={handleToggleGroup}
+                    />
+                  ))
                 )}
               </div>
             </div>
@@ -486,7 +747,184 @@ const ClassSelector = ({
             saved on this device.
           </p>
         ))}
-    </section>
+
+      {!minimized && occurrences.length > 0 && (
+        <div className="reschedule-section">
+          <div className="reschedule-header">
+            <button
+              type="button"
+              className="link-button reschedule-toggle"
+              onClick={() => setShowReschedule((v) => !v)}
+              aria-expanded={showReschedule}
+            >
+              Adjust class times
+              <IconChevronDown size={13} className={showReschedule ? 'is-flipped' : undefined} />
+            </button>
+
+            <div className="reschedule-info-wrap" ref={rescheduleInfoRef}>
+              <button
+                type="button"
+                className="info-btn"
+                onClick={() => setShowRescheduleInfo((v) => !v)}
+                aria-expanded={showRescheduleInfo}
+                aria-label="What does adjusting class times do?"
+              >
+                <IconInfo size={18} />
+                <span>Info</span>
+              </button>
+              {showRescheduleInfo && (
+                <div className="info-popover" role="tooltip">
+                  Moved by the university but the official sheet hasn’t caught up yet? Set a
+                  different day/time here — it only changes what you see, not the shared
+                  schedule.
+                </div>
+              )}
+            </div>
+          </div>
+
+          {showReschedule && (
+            <div className="reschedule-panel">
+              {moveError && (
+                <p className="reschedule-error" role="alert">
+                  {moveError}
+                </p>
+              )}
+              <div className="reschedule-list">
+                {occurrences.map((occurrence) => {
+                  const activeOverride = findActiveOverride(occurrence);
+                  return (
+                    <RescheduleRow
+                      key={`${occurrence.course}|${occurrence.section}|${occurrence.day}|${occurrence.slots[0]}`}
+                      occurrence={occurrence}
+                      timeSlots={timeSlots}
+                      activeOverride={activeOverride}
+                      onMove={(newDay, newSlot) => handleMove(occurrence, newDay, newSlot)}
+                      onReset={() => handleResetMove(occurrence)}
+                    />
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {!minimized && selectedClasses.length > 0 && (
+        <div className="reschedule-section">
+          <div className="reschedule-header">
+            <button
+              type="button"
+              className="link-button reschedule-toggle"
+              onClick={() => setShowExtra((v) => !v)}
+              aria-expanded={showExtra}
+            >
+              Add extra class
+              <IconChevronDown size={13} className={showExtra ? 'is-flipped' : undefined} />
+            </button>
+
+            <div className="reschedule-info-wrap" ref={extraInfoRef}>
+              <button
+                type="button"
+                className="info-btn"
+                onClick={() => setShowExtraInfo((v) => !v)}
+                aria-expanded={showExtraInfo}
+                aria-label="What does adding an extra class do?"
+              >
+                <IconInfo size={18} />
+                <span>Info</span>
+              </button>
+              {showExtraInfo && (
+                <div className="info-popover" role="tooltip">
+                  For a one-off makeup or revision class, this week only — pick one of your
+                  already-selected courses and a day/slot. It won’t show on print or in
+                  downloaded images, and gets a dashed outline on screen so it’s easy to tell
+                  apart from your regular schedule. Remove it yourself once the week is over —
+                  there’s no calendar here, so it stays until you take it off.
+                </div>
+              )}
+            </div>
+          </div>
+
+          {showExtra && (
+            <div className="reschedule-panel">
+              {extraError && (
+                <p className="reschedule-error" role="alert">
+                  {extraError}
+                </p>
+              )}
+              <div className="extra-form">
+                <select
+                  className="reschedule-select extra-course-select"
+                  value={effectiveExtraCourse}
+                  onChange={(e) => setExtraCourseValue(e.target.value)}
+                  aria-label="Course for the extra class"
+                >
+                  {selectedClasses.map((value) => (
+                    <option key={value} value={value}>
+                      {formatClassLabel(value)}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  className="reschedule-select"
+                  value={extraDay}
+                  onChange={(e) => setExtraDay(e.target.value)}
+                  aria-label="Day for the extra class"
+                >
+                  {DAY_ORDER.map((d) => (
+                    <option key={d} value={d}>
+                      {d}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  className="reschedule-select"
+                  value={effectiveExtraSlot}
+                  onChange={(e) => setExtraSlot(e.target.value)}
+                  aria-label="Time slot for the extra class"
+                >
+                  {timeSlots.map((s, i) => (
+                    <option key={s} value={s}>
+                      {`Slot ${i + 1} · ${formatSlot(s).start}`}
+                    </option>
+                  ))}
+                </select>
+                <button type="button" className="link-button" onClick={handleAddExtra}>
+                  Add
+                </button>
+              </div>
+
+              {extraClasses.length > 0 && (
+                <div className="reschedule-list">
+                  {extraClasses.map((extra) => (
+                    <div
+                      key={`${extra.course}|${extra.section}|${extra.day}|${extra.time}`}
+                      className="reschedule-row"
+                    >
+                      <div className="reschedule-info">
+                        <span className="reschedule-course">
+                          {extra.course}
+                          {extra.section !== 'N/A' && ` (${extra.section})`}
+                        </span>
+                        <span className="reschedule-official">
+                          {extra.day}, {formatSlot(extra.time).start}
+                        </span>
+                      </div>
+                      <div className="reschedule-controls">
+                        <button type="button" className="link-button" onClick={() => handleRemoveExtra(extra)}>
+                          Remove
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+      </section>
+    </>
   );
 };
 

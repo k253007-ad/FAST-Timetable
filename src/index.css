@@ -324,11 +324,27 @@ button {
   font-weight: 600;
   color: var(--text);
   text-align: left;
+  text-decoration: none;
   cursor: pointer;
 }
 
 .menu-item:hover {
   background: var(--surface-2);
+}
+
+.menu-item:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.menu-item:disabled:hover {
+  background: none;
+}
+
+.menu-divider {
+  height: 1px;
+  margin: 5px 4px;
+  background: var(--border);
 }
 
 .menu-item svg {
@@ -410,7 +426,6 @@ button {
   align-items: flex-start;
   gap: 9px;
   padding: 10px 14px;
-  margin-bottom: 12px;
   border-radius: var(--radius-sm);
   background: var(--danger-soft);
   border: 1px solid rgba(217, 45, 32, 0.18);
@@ -465,13 +480,195 @@ button {
   color: var(--text-3);
 }
 
+/* Adjust class times — manual per-device day/slot overrides */
+
+.reschedule-section {
+  margin-top: 12px;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+
+.reschedule-header {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.reschedule-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.reschedule-toggle svg {
+  transition: transform 0.15s ease;
+}
+
+.reschedule-toggle svg.is-flipped {
+  transform: rotate(180deg);
+}
+
+.reschedule-info-wrap {
+  display: inline-flex;
+}
+
+.info-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 11px 0 9px;
+  flex-shrink: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--surface-3);
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.info-btn:hover {
+  background: var(--surface-2);
+  border-color: var(--text-3);
+  color: var(--text);
+}
+
+/* Anchored to .reschedule-header (the nearest positioned ancestor, not the
+   narrow .reschedule-info-wrap the button itself sits in) and spans its full
+   width via left:0/right:0 instead of a fixed width from the button's own
+   position — a fixed width anchored to the button overflowed off the right
+   edge of the screen on mobile, since the button isn't flush with either
+   edge of the card. */
+.info-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  padding: 10px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-lg);
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--text-2);
+  z-index: 40;
+  animation: pop 0.14s ease;
+  transform-origin: top center;
+}
+
+.reschedule-panel {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.reschedule-error {
+  margin: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--danger-ink);
+}
+
+/* Capped so a handful of selected classes with several sessions each can't
+   push the rest of "My classes" (and the timetable below it) endlessly down
+   the page — same reasoning as .combobox-list's own scroll cap. */
+.reschedule-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 340px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 2px;
+}
+
+.extra-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.extra-course-select {
+  flex: 1 1 200px;
+  max-width: 100%;
+}
+
+.reschedule-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+.reschedule-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.reschedule-course {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.reschedule-official,
+.reschedule-moved {
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.reschedule-moved {
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+
+.reschedule-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.reschedule-select {
+  height: 32px;
+  padding: 0 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-xs);
+  background: var(--surface);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.reschedule-select:hover {
+  border-color: var(--text-3);
+}
+
+.reschedule-select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft-strong);
+}
+
 /* Selector toolbar: mode tabs + minimize + timetable-slot picker */
 
 .selector-toolbar {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
+  flex-direction: column;
+  align-items: stretch;
   gap: 10px;
   margin-bottom: 12px;
 }
@@ -479,6 +676,7 @@ button {
 .toolbar-secondary {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 8px;
 }
 
@@ -581,20 +779,10 @@ button {
   position: relative;
 }
 
-.combobox-icon {
-  position: absolute;
-  left: 13px;
-  top: 50%;
-  transform: translateY(-50%);
-  color: var(--text-3);
-  display: inline-flex;
-  pointer-events: none;
-}
-
 .combobox-input {
   width: 100%;
   height: 42px;
-  padding: 0 38px 0 40px;
+  padding: 0 42px 0 14px;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
   background: var(--surface);
@@ -602,6 +790,17 @@ button {
   font-family: inherit;
   font-size: 13.5px;
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+/* type="search" (used so mobile keyboards show a "search" action key) draws
+   its own native clear button in WebKit/Blink, which would sit on top of our
+   custom X — suppress it since ours already covers that job. */
+.combobox-input::-webkit-search-cancel-button,
+.combobox-input::-webkit-search-decoration {
+  -webkit-appearance: none;
+  appearance: none;
 }
 
 .combobox-input::placeholder {
@@ -623,7 +822,11 @@ button {
   cursor: not-allowed;
 }
 
-.combobox-clear {
+/* The one icon slot for a search box, always on the right: a plain search
+   icon while idle, the same icon as a tappable "submit" button once typing
+   (see SearchAction in ClassSelector.jsx), or a clear (X) button once
+   blurred with a query still in the box. Only one state renders at a time. */
+.combobox-action {
   position: absolute;
   right: 9px;
   top: 50%;
@@ -631,6 +834,10 @@ button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  color: var(--text-3);
+}
+
+.combobox-action-btn {
   width: 26px;
   height: 26px;
   border: none;
@@ -640,7 +847,7 @@ button {
   cursor: pointer;
 }
 
-.combobox-clear:hover {
+.combobox-action-btn:hover {
   color: var(--text);
 }
 
@@ -771,15 +978,15 @@ button {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  height: 30px;
-  padding: 0 6px 0 11px;
+  min-height: 30px;
+  padding: 6px 6px 6px 11px;
   background: var(--surface-2);
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: 15px;
   font-size: 12.5px;
   font-weight: 500;
   color: var(--text);
-  max-width: 100%;
+  max-width: min(280px, 100%);
 }
 
 .chip-dot {
@@ -787,12 +994,14 @@ button {
   height: 8px;
   border-radius: 999px;
   flex-shrink: 0;
+  align-self: flex-start;
+  margin-top: 4px;
 }
 
 .chip-label {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: break-word;
+  line-height: 1.35;
 }
 
 .chip-remove {
@@ -1125,6 +1334,7 @@ button {
 }
 
 .class-box {
+  position: relative;
   flex: 1;
   display: flex;
   flex-direction: column;
@@ -1133,6 +1343,22 @@ button {
   padding: 7px 9px;
   border-radius: 7px;
   min-width: 0;
+}
+
+.extra-badge {
+  position: absolute;
+  top: -1px;
+  right: 4px;
+  font-size: 8.5px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 2px 6px;
+  border-radius: 0 0 6px 6px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-top: none;
 }
 
 .class-course {
@@ -1302,25 +1528,29 @@ button {
 /* ---------- Scrollbars ---------- */
 
 .tt-scroll::-webkit-scrollbar,
-.combobox-list::-webkit-scrollbar {
+.combobox-list::-webkit-scrollbar,
+.reschedule-list::-webkit-scrollbar {
   width: 9px;
   height: 9px;
 }
 
 .tt-scroll::-webkit-scrollbar-thumb,
-.combobox-list::-webkit-scrollbar-thumb {
+.combobox-list::-webkit-scrollbar-thumb,
+.reschedule-list::-webkit-scrollbar-thumb {
   background: var(--border-strong);
   border-radius: 999px;
   border: 2px solid var(--surface);
 }
 
 .tt-scroll::-webkit-scrollbar-thumb:hover,
-.combobox-list::-webkit-scrollbar-thumb:hover {
+.combobox-list::-webkit-scrollbar-thumb:hover,
+.reschedule-list::-webkit-scrollbar-thumb:hover {
   background: var(--text-3);
 }
 
 .tt-scroll,
-.combobox-list {
+.combobox-list,
+.reschedule-list {
   scrollbar-width: thin;
   scrollbar-color: var(--border-strong) transparent;
 }
@@ -1353,6 +1583,14 @@ button {
 
 .exporting .now-badge,
 .exporting .next-badge {
+  display: none;
+}
+
+/* Extra classes (see utils/schedule.js's buildExtraRows) are a one-off,
+   this-week-only addition — never part of the real recurring schedule, so
+   they're excluded from both print and exported images, same dual-exclusion
+   pattern as every other new Date()-driven or session-scoped element. */
+.exporting .class-box.is-extra {
   display: none;
 }
 
@@ -1438,6 +1676,10 @@ button {
   .brand-sub {
     display: none;
   }
+
+  .mode-tabs {
+    justify-content: space-between;
+  }
 }
 
 /* ---------- Print ---------- */
@@ -1495,6 +1737,10 @@ button {
   .tt-body.is-next {
     outline: none;
     background-color: transparent;
+  }
+
+  .class-box.is-extra {
+    display: none;
   }
 
   /* Legend + session count: hidden on screen, shown in exports/print */

@@ -5,7 +5,7 @@
 // regardless of selection order, with linear probing to resolve collisions
 // inside the current selection.
 
-export const COURSE_PALETTE = [
+const COURSE_PALETTE = [
   '#4f6bd8', // indigo
   '#0d9488', // teal
   '#d97706', // amber

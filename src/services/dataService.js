@@ -16,34 +16,30 @@ const API_META_URL = '/api/data';
 
 /**
  * Parses the multi-line string from a cell in the Google Sheet.
- * Expected format:
- *   COURSE-CODE(Section)
+ * Expected format (changed 2026-08-30 — the sheet itself was reformatted for
+ * human readability, one field per line):
+ *   Course Name
+ *   Room
+ *   Section
  *   Instructor Name
  *
- * A course name can itself contain parentheses (e.g. "Understanding
- * Sirat-Un-Nabi (PBUH)(BCS-1K)") — the Section is always the LAST
- * parenthesized group, not the first, so only that one gets stripped from
- * the course text. Taking the first group here used to misread "(PBUH)" as
- * the section and leave the real section baked into the course name.
+ * The Room line is intentionally ignored here — it's already known from the
+ * row's own first column (see `room` in fetchSheet below) and is only
+ * repeated inside the cell so the sheet is readable without cross-referencing
+ * the row header. Section now being its own line (rather than parsed out of
+ * the course text via a trailing "(Section)") retires the old
+ * last-parenthesized-group logic entirely — a course name containing its own
+ * parentheses (e.g. "Understanding Sirat-Un-Nabi (PBUH)") is no longer
+ * ambiguous with the section marker.
  */
 const parseCellValue = (cellValue) => {
   if (!cellValue) {
     return {};
   }
   const parts = cellValue.split('\n');
-  const courseAndSection = parts[0] || '';
-  const instructor = (parts[1] || 'N/A').trim();
-
-  const parenGroups = [...courseAndSection.matchAll(/\(([^)]+)\)/g)];
-  const sectionMatch = parenGroups[parenGroups.length - 1];
-  const section = sectionMatch ? sectionMatch[1].trim() : 'N/A';
-
-  const course = sectionMatch
-    ? (
-        courseAndSection.slice(0, sectionMatch.index) +
-        courseAndSection.slice(sectionMatch.index + sectionMatch[0].length)
-      ).trim()
-    : courseAndSection.trim();
+  const course = (parts[0] || '').trim();
+  const section = (parts[2] || 'N/A').trim();
+  const instructor = (parts[3] || 'N/A').trim();
 
   return { course, section, instructor };
 };

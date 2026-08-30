@@ -13,11 +13,37 @@ import {
 // fresh from localStorage on every tick rather than kept in React state, so
 // this stays correct even while the user is browsing a friend's profile.
 const MAIN_KEY = 'selectedClasses_main';
+const MAIN_OVERRIDES_KEY = 'classOverrides_main';
+const MAIN_EXTRAS_KEY = 'extraClasses_main';
 const TICK_MS = 20000; // fine enough to catch the "10 minutes left" checkpoint promptly
 
 const getMainClasses = () => {
   try {
     const saved = localStorage.getItem(MAIN_KEY);
+    return saved ? JSON.parse(saved) : [];
+  } catch {
+    return [];
+  }
+};
+
+// Same "read fresh every tick" reasoning as getMainClasses above — a manual
+// time override (see utils/schedule.js) must apply to notifications too,
+// and must always reflect the Main profile's own moves regardless of which
+// profile tab is open.
+const getMainOverrides = () => {
+  try {
+    const saved = localStorage.getItem(MAIN_OVERRIDES_KEY);
+    return saved ? JSON.parse(saved) : [];
+  } catch {
+    return [];
+  }
+};
+
+// Same reasoning again — a one-off "extra class" (see buildExtraRows in
+// utils/schedule.js) must fire notifications too, for the Main profile only.
+const getMainExtras = () => {
+  try {
+    const saved = localStorage.getItem(MAIN_EXTRAS_KEY);
     return saved ? JSON.parse(saved) : [];
   } catch {
     return [];
@@ -48,8 +74,6 @@ const REMINDER_CHECKPOINTS = [30, 10, 5];
  */
 export const useClassNotifications = (data) => {
   const [permission, setPermission] = useState(notificationPermission);
-  const [current, setCurrent] = useState(null);
-  const [next, setNext] = useState(null);
   // Mirrors manualEndedKeyRef but as real state, so NowNext (rendered via
   // App.jsx) reflects a "Class ended" click immediately instead of waiting
   // up to TICK_MS for the next interval tick.
@@ -116,7 +140,9 @@ export const useClassNotifications = (data) => {
       }
 
       const mainClasses = getMainClasses();
-      const { processedSchedule } = buildSchedule(data, mainClasses);
+      const mainOverrides = getMainOverrides();
+      const mainExtras = getMainExtras();
+      const { processedSchedule } = buildSchedule(data, mainClasses, mainOverrides, mainExtras);
       const nowMinutes = now.getHours() * 60 + now.getMinutes();
       const sessions = (processedSchedule[today] || []).filter((cell) => !cell.isEmpty);
       const currentCell = sessions.find((cell) => nowMinutes >= cell.startMin && nowMinutes < cell.endMin);
@@ -157,8 +183,6 @@ export const useClassNotifications = (data) => {
 
       const prevCurrentInfo = currentRef.current;
       currentRef.current = currentInfo;
-      setCurrent(currentInfo);
-      setNext(nextInfo);
 
       if (notificationPermission() !== 'granted') return;
 
@@ -236,5 +260,5 @@ export const useClassNotifications = (data) => {
     return () => clearInterval(id);
   }, [data]);
 
-  return { permission, requestPermission, current, next, markCurrentEnded, manualEndedKey };
+  return { permission, requestPermission, markCurrentEnded, manualEndedKey };
 };

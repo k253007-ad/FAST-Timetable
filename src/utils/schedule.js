@@ -4,6 +4,8 @@
 // into one cell as a clash). Used by both the grid and the now/next summary
 // so they never disagree about what a "session" is.
 
+// Exported again as of the manual-reschedule feature — ClassSelector needs
+// the weekday list for its "move to..." day picker.
 export const DAY_ORDER = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
 
 // Sheet times have no AM/PM marker; anything before 7 is an afternoon class.
@@ -19,12 +21,6 @@ export const toMinutes = (timeStr) => {
 export const formatSlot = (slot) => {
   const times = slot.match(/\d{1,2}:\d{2}/g) || [];
   return { start: times[0] || slot, end: times[1] || '' };
-};
-
-/** Start/end minutes for a raw slot string. */
-export const slotMinuteRange = (slot) => {
-  const { start, end } = formatSlot(slot);
-  return { startMin: toMinutes(start), endMin: toMinutes(end) };
 };
 
 export const cleanRoom = (room) =>
@@ -119,12 +115,161 @@ export const sessionKey = (cell) => {
 const sameClass = (a, b) =>
   a.Course === b.Course && a.Section === b.Section && a.Instructor === b.Instructor;
 
+// Every distinct slot string across the whole timetable, in chronological
+// order — shared by buildSchedule and getClassOccurrences below, and by the
+// reschedule UI's "move to..." slot picker.
+export const getAllTimeSlots = (data) => {
+  if (!data?.timetable) return [];
+  return [...new Set(data.timetable.map((item) => item.Time))].sort(
+    (a, b) => toMinutes(a.split('-')[0]) - toMinutes(b.split('-')[0])
+  );
+};
+
+/**
+ * Manual per-device time overrides ("my class moved from Wednesday slot 4 to
+ * Thursday slot 7") — the shared sheet is updated manually and can lag real
+ * schedule changes, so this lets a student correct just their own view
+ * without touching the shared data. Each override is one raw timetable row's
+ * worth of relocation: `{ course, section, day, time, newDay, newTime }`.
+ * A multi-slot lab moved as a block becomes several of these, one per raw
+ * slot it occupies — see buildMoveOverrides below, which is what actually
+ * generates them from a UI "move this session" action.
+ */
+export const applyOverrides = (items, overrides) => {
+  if (!overrides || overrides.length === 0) return items;
+  return items.map((item) => {
+    const match = overrides.find(
+      (o) => o.course === item.Course && o.section === item.Section && o.day === item.Day && o.time === item.Time
+    );
+    return match ? { ...item, Day: match.newDay, Time: match.newTime } : item;
+  });
+};
+
+/**
+ * One entry per distinct (Course, Section, Day) session among the given
+ * classes' *official* (un-overridden) raw timetable rows — a multi-slot lab
+ * collapses into a single occurrence spanning however many consecutive
+ * slots (by `timeSlots` order) it actually occupies, so moving it moves the
+ * whole block at once rather than one raw 50-minute row at a time. Always
+ * computed from the official schedule, not the currently-overridden one, so
+ * an occurrence's identity doesn't shift out from under an existing move.
+ *
+ * De-dupes to distinct *times* before detecting consecutive runs — the
+ * sheet can have more than one raw row for the same (Course, Section, Day,
+ * Time) (e.g. the same section split across two rooms/instructors for
+ * capacity), and treating each raw row as its own run-position would split
+ * those into bogus separate occurrences at the identical time instead of
+ * recognizing them as one shared slot. `applyOverrides` already moves every
+ * raw row matching a given (course, section, day, time), so collapsing here
+ * doesn't lose either room's row when the slot is actually moved.
+ */
+export const getClassOccurrences = (data, selectedClasses) => {
+  if (!data?.timetable) return [];
+
+  const timeSlots = getAllTimeSlots(data);
+  const slotIndex = new Map(timeSlots.map((t, i) => [t, i]));
+
+  const relevant = data.timetable.filter((item) =>
+    selectedClasses.includes(`${item.Course} - ${item.Section}`)
+  );
+
+  const groups = new Map(); // "Course|Section|Day" -> Set of distinct Time strings
+  relevant.forEach((item) => {
+    const key = `${item.Course}|${item.Section}|${item.Day}`;
+    if (!groups.has(key)) groups.set(key, new Set());
+    groups.get(key).add(item.Time);
+  });
+
+  const occurrences = [];
+  groups.forEach((timeSet, key) => {
+    const [course, section, day] = key.split('|');
+    const times = [...timeSet].sort((a, b) => slotIndex.get(a) - slotIndex.get(b));
+    let run = [times[0]];
+    for (let i = 1; i < times.length; i++) {
+      if (slotIndex.get(times[i]) === slotIndex.get(run[run.length - 1]) + 1) {
+        run.push(times[i]);
+      } else {
+        occurrences.push({ course, section, day, slots: run });
+        run = [times[i]];
+      }
+    }
+    occurrences.push({ course, section, day, slots: run });
+  });
+
+  return occurrences.sort(
+    (a, b) =>
+      DAY_ORDER.indexOf(a.day) - DAY_ORDER.indexOf(b.day) ||
+      slotIndex.get(a.slots[0]) - slotIndex.get(b.slots[0]) ||
+      a.course.localeCompare(b.course)
+  );
+};
+
+/**
+ * Turns a "move this occurrence to {newDay} starting at {newStartSlot}" UI
+ * action into the raw per-slot override entries `applyOverrides` expects —
+ * one per slot the occurrence spans, kept in the same relative order.
+ * Returns null if the day doesn't have enough slots left from newStartSlot
+ * to fit the whole occurrence.
+ */
+export const buildMoveOverrides = (occurrence, timeSlots, newDay, newStartSlot) => {
+  const startIdx = timeSlots.indexOf(newStartSlot);
+  if (startIdx === -1) return null;
+  const targetSlots = timeSlots.slice(startIdx, startIdx + occurrence.slots.length);
+  if (targetSlots.length < occurrence.slots.length) return null;
+  return occurrence.slots.map((time, i) => ({
+    course: occurrence.course,
+    section: occurrence.section,
+    day: occurrence.day,
+    time,
+    newDay,
+    newTime: targetSlots[i],
+  }));
+};
+
+/**
+ * A one-off "extra class" — a single additional occurrence of an
+ * already-selected course/section (a makeup lecture, an extra revision
+ * session, etc.), added for one specific day/slot rather than as a
+ * recurring weekly change like an override. `{ course, section, day, time }`
+ * is all a UI action needs to specify; `buildExtraRows` below fills in the
+ * Instructor/Room by copying them from that course's own real timetable row
+ * (there's no source-of-truth row for a slot that doesn't officially exist).
+ * The app has no real calendar/date model — everything is a recurring
+ * weekly grid — so "only for this week" is enforced by the student manually
+ * removing it once the week is over, not by any date logic here.
+ */
+export const buildExtraRows = (data, extraClasses) => {
+  if (!data?.timetable || !extraClasses || extraClasses.length === 0) return [];
+  return extraClasses
+    .map((extra) => {
+      const template = data.timetable.find(
+        (item) => item.Course === extra.course && item.Section === extra.section
+      );
+      if (!template) return null;
+      return {
+        ...template,
+        Day: extra.day,
+        Time: extra.time,
+        isExtra: true,
+      };
+    })
+    .filter(Boolean);
+};
+
 /**
  * Builds { days, timeSlots, processedSchedule, sessionCount, courseCount, clashCount }
  * for the given timetable data and selection. `processedSchedule[day]` is an
- * ordered array of cells: `{ slot, colSpan, classes, isEmpty }`.
+ * ordered array of cells: `{ slot, colSpan, classes, isEmpty }`. `overrides`
+ * (see applyOverrides above) relocates specific sessions before the grid is
+ * built, so a manually-moved class clashes/merges exactly like a real one
+ * scheduled there would. `extraClasses` (see buildExtraRows above) adds
+ * one-off sessions on top — they participate in clash detection like any
+ * other session, but are flagged `isExtra` so the UI can style/hide them
+ * differently (not printed, distinct look) and so their tally is excluded
+ * from `sessionCount`/`courseCount` (those numbers are print/export-only —
+ * see .grid-toolbar — and should describe what the printed grid shows).
  */
-export const buildSchedule = (data, selectedClasses) => {
+export const buildSchedule = (data, selectedClasses, overrides = [], extraClasses = []) => {
   if (!data?.timetable) {
     return {
       days: [],
@@ -140,13 +285,15 @@ export const buildSchedule = (data, selectedClasses) => {
     (a, b) => DAY_ORDER.indexOf(a) - DAY_ORDER.indexOf(b)
   );
 
-  const timeSlots = [...new Set(data.timetable.map((item) => item.Time))].sort(
-    (a, b) => toMinutes(a.split('-')[0]) - toMinutes(b.split('-')[0])
-  );
+  const timeSlots = getAllTimeSlots(data);
 
-  const filteredData = data.timetable.filter((item) =>
-    selectedClasses.includes(`${item.Course} - ${item.Section}`)
-  );
+  const filteredData = [
+    ...applyOverrides(
+      data.timetable.filter((item) => selectedClasses.includes(`${item.Course} - ${item.Section}`)),
+      overrides
+    ),
+    ...buildExtraRows(data, extraClasses),
+  ];
 
   const schedule = {};
   days.forEach((day) => {
@@ -227,8 +374,8 @@ export const buildSchedule = (data, selectedClasses) => {
     days,
     timeSlots,
     processedSchedule,
-    sessionCount: filteredData.length,
-    courseCount: new Set(filteredData.map((item) => item.Course)).size,
+    sessionCount: filteredData.filter((item) => !item.isExtra).length,
+    courseCount: new Set(filteredData.filter((item) => !item.isExtra).map((item) => item.Course)).size,
     clashCount,
   };
 };

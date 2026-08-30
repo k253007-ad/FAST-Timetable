@@ -3,8 +3,7 @@ import { splitClassValue, withAlpha } from '../utils/courseColors.js';
 import { buildSchedule, cleanRoom, formatSlot } from '../utils/schedule.js';
 import { IconAlert, IconCalendar } from './Icons.jsx';
 
-// A course+section label that's too long for its box (more common now that
-// the section is appended to the course name) used to just get silently
+// A course name that's too long for its box used to just get silently
 // clipped by class-course's line-clamp, with no on-screen sign anything was
 // cut off — and there's no reliable way to predict from the string alone
 // whether it'll wrap to fit (word-break points vary: two labels the same
@@ -27,11 +26,11 @@ const fitCourseLabels = (container) => {
   });
 };
 
-const TimetableGrid = ({ data, selectedClasses, courseColors, isDark }) => {
+const TimetableGrid = ({ data, selectedClasses, overrides, extraClasses, courseColors, isDark }) => {
   const gridRef = useRef(null);
   const { days, timeSlots, processedSchedule, sessionCount, courseCount, clashCount } = useMemo(
-    () => buildSchedule(data, selectedClasses),
-    [data, selectedClasses]
+    () => buildSchedule(data, selectedClasses, overrides, extraClasses),
+    [data, selectedClasses, overrides, extraClasses]
   );
 
   // Re-fit course labels after every render that could change them (new
@@ -126,8 +125,18 @@ const TimetableGrid = ({ data, selectedClasses, courseColors, isDark }) => {
     selectedClasses.some((v) => splitClassValue(v).course === course)
   );
 
-  const boxStyle = (course) => {
+  const boxStyle = (course, isExtra) => {
     const color = courseColors[course] || '#64748b';
+    if (isExtra) {
+      // Same per-course colour, but a dashed outline + lighter fill instead
+      // of the normal solid left-accent — distinct at a glance from a real
+      // recurring session without needing a whole second colour system.
+      return {
+        backgroundColor: withAlpha(color, isDark ? 0.1 : 0.06),
+        border: `1.5px dashed ${color}`,
+        borderLeftWidth: '3px',
+      };
+    }
     return {
       backgroundColor: withAlpha(color, isDark ? 0.18 : 0.11),
       borderLeft: `3px solid ${color}`,
@@ -217,19 +226,19 @@ const TimetableGrid = ({ data, selectedClasses, courseColors, isDark }) => {
                       {isNow && <span className="now-badge">Now</span>}
                       {isNext && <span className="next-badge">Next</span>}
                       {cell.classes.map((classItem, index) => {
-                        const label =
-                          classItem.Section !== 'N/A'
-                            ? `${classItem.Course} (${classItem.Section})`
-                            : classItem.Course;
+                        const hasSection = classItem.Section !== 'N/A';
+                        const extraSuffix = classItem.isExtra ? ' · Extra, this week only' : '';
                         return (
                           <div
                             key={index}
-                            className="class-box"
-                            style={boxStyle(classItem.Course)}
-                            title={`${label} · ${cleanRoom(classItem.Room)} · ${classItem.Instructor}`}
+                            className={`class-box${classItem.isExtra ? ' is-extra' : ''}`}
+                            style={boxStyle(classItem.Course, classItem.isExtra)}
+                            title={`${classItem.Course} · ${cleanRoom(classItem.Room)}${hasSection ? ` · ${classItem.Section}` : ''} · ${classItem.Instructor}${extraSuffix}`}
                           >
-                            <span className="class-course">{label}</span>
+                            {classItem.isExtra && <span className="extra-badge">Extra</span>}
+                            <span className="class-course">{classItem.Course}</span>
                             <span className="class-meta">{cleanRoom(classItem.Room)}</span>
+                            {hasSection && <span className="class-meta">{classItem.Section}</span>}
                             <span className="class-meta">{classItem.Instructor}</span>
                           </div>
                         );

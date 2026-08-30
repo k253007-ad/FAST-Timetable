@@ -11,15 +11,19 @@ import {
   IconAlert,
   IconBell,
   IconBellOff,
-  IconChevronDown,
+  IconGithub,
+  IconPhone,
   IconPrinter,
   IconImage,
   IconMoon,
   IconRefresh,
+  IconSettings,
   IconSun,
 } from './components/Icons.jsx';
 import './index.css';
 
+const GITHUB_PROFILE_URL = 'https://github.com/k253007-ad';
+const WHATSAPP_URL = 'https://wa.me/923333320415';
 const REFRESH_INTERVAL_MS = 3600000; // hourly, matching the sheet's update cadence
 
 const getInitialTheme = () => {
@@ -66,6 +70,40 @@ const getSavedClasses = (profile) => {
   }
 };
 
+// Manual per-class time overrides ("moved from Wed slot 4 to Thu slot 7") —
+// same per-profile key scheme as selections above, additive/separate keys so
+// it can't collide with the existing `selectedClasses*` storage.
+const getOverrideStorageKey = (profile) => {
+  if (profile === 'main') return 'classOverrides_main';
+  return profile === 1 ? 'classOverrides' : `classOverrides_${profile}`;
+};
+
+const getSavedOverrides = (profile) => {
+  try {
+    const saved = localStorage.getItem(getOverrideStorageKey(profile));
+    return saved ? JSON.parse(saved) : [];
+  } catch {
+    return [];
+  }
+};
+
+// One-off "extra class" additions ("just this week, add one more Data
+// Structures session Thursday slot 7") — same per-profile key scheme again,
+// its own separate storage so it can't collide with selections or overrides.
+const getExtraStorageKey = (profile) => {
+  if (profile === 'main') return 'extraClasses_main';
+  return profile === 1 ? 'extraClasses' : `extraClasses_${profile}`;
+};
+
+const getSavedExtras = (profile) => {
+  try {
+    const saved = localStorage.getItem(getExtraStorageKey(profile));
+    return saved ? JSON.parse(saved) : [];
+  } catch {
+    return [];
+  }
+};
+
 const timeAgo = (date, now) => {
   const mins = Math.floor((now - date.getTime()) / 60000);
   if (mins < 1) return 'just now';
@@ -83,14 +121,18 @@ function App() {
   const [now, setNow] = useState(() => Date.now());
   const [exporting, setExporting] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [theme, setTheme] = useState(getInitialTheme);
   const [activeProfile, setActiveProfile] = useState(getSavedActiveProfile);
   const [selectedClasses, setSelectedClasses] = useState(() =>
     getSavedClasses(getSavedActiveProfile())
   );
+  const [overrides, setOverrides] = useState(() => getSavedOverrides(getSavedActiveProfile()));
+  const [extraClasses, setExtraClasses] = useState(() => getSavedExtras(getSavedActiveProfile()));
 
   const captureRef = useRef(null);
   const exportMenuRef = useRef(null);
+  const settingsMenuRef = useRef(null);
   const hasDataRef = useRef(false);
 
   const notif = useClassNotifications(timetableData);
@@ -117,9 +159,27 @@ function App() {
     }
   }, [activeProfile]);
 
+  useEffect(() => {
+    try {
+      localStorage.setItem(getOverrideStorageKey(activeProfile), JSON.stringify(overrides));
+    } catch {
+      /* storage unavailable */
+    }
+  }, [overrides, activeProfile]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(getExtraStorageKey(activeProfile), JSON.stringify(extraClasses));
+    } catch {
+      /* storage unavailable */
+    }
+  }, [extraClasses, activeProfile]);
+
   const switchProfile = useCallback((profile) => {
     setActiveProfile(profile);
     setSelectedClasses(getSavedClasses(profile));
+    setOverrides(getSavedOverrides(profile));
+    setExtraClasses(getSavedExtras(profile));
   }, []);
 
   // Apply + persist theme.
@@ -190,6 +250,25 @@ function App() {
       document.removeEventListener('keydown', onKeyDown);
     };
   }, [exportOpen]);
+
+  // Close the settings menu on outside click / Escape.
+  useEffect(() => {
+    if (!settingsOpen) return;
+    const onPointerDown = (e) => {
+      if (settingsMenuRef.current && !settingsMenuRef.current.contains(e.target)) {
+        setSettingsOpen(false);
+      }
+    };
+    const onKeyDown = (e) => {
+      if (e.key === 'Escape') setSettingsOpen(false);
+    };
+    document.addEventListener('pointerdown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [settingsOpen]);
 
   const allClasses = useMemo(
     () =>
@@ -286,7 +365,6 @@ function App() {
               >
                 <IconPrinter size={16} />
                 <span className="btn-label">{exporting ? 'Printing…' : 'Print'}</span>
-                <IconChevronDown size={14} />
               </button>
               {exportOpen && (
                 <div className="menu" role="menu">
@@ -308,42 +386,84 @@ function App() {
               )}
             </div>
 
-            <button
-              type="button"
-              className="btn btn-ghost btn-icon"
-              onClick={notif.permission === 'granted' ? undefined : notif.requestPermission}
-              disabled={notif.permission === 'unsupported' || notif.permission === 'granted'}
-              aria-label={
-                notif.permission === 'granted'
-                  ? 'Class notifications are on'
-                  : notif.permission === 'denied'
-                    ? 'Notifications blocked — enable them in your browser settings'
-                    : notif.permission === 'unsupported'
-                      ? 'Notifications aren’t supported in this browser'
-                      : 'Enable class notifications'
-              }
-              title={
-                notif.permission === 'granted'
-                  ? 'Class notifications are on — based on your Main timetable'
-                  : notif.permission === 'denied'
-                    ? 'Notifications blocked — enable them in your browser settings'
-                    : notif.permission === 'unsupported'
-                      ? 'Notifications aren’t supported in this browser (try installing this site as an app first)'
-                      : 'Enable class notifications for your Main timetable'
-              }
-            >
-              {notif.permission === 'granted' ? <IconBell size={17} /> : <IconBellOff size={17} />}
-            </button>
+            <div className="menu-wrap" ref={settingsMenuRef}>
+              <button
+                type="button"
+                className="btn btn-ghost btn-icon"
+                onClick={() => setSettingsOpen((v) => !v)}
+                aria-haspopup="menu"
+                aria-expanded={settingsOpen}
+                aria-label="Settings"
+                title="Settings"
+              >
+                <IconSettings size={17} />
+              </button>
+              {settingsOpen && (
+                <div className="menu" role="menu">
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="menu-item"
+                    onClick={() => {
+                      if (notif.permission !== 'granted') notif.requestPermission();
+                      setSettingsOpen(false);
+                    }}
+                    disabled={notif.permission === 'unsupported' || notif.permission === 'granted'}
+                  >
+                    {notif.permission === 'granted' ? <IconBell size={16} /> : <IconBellOff size={16} />}
+                    <span>
+                      {notif.permission === 'granted'
+                        ? 'Notifications on'
+                        : notif.permission === 'denied'
+                          ? 'Notifications blocked'
+                          : notif.permission === 'unsupported'
+                            ? 'Notifications unsupported'
+                            : 'Enable notifications'}
+                      <small>Based on your Main timetable</small>
+                    </span>
+                  </button>
 
-            <button
-              type="button"
-              className="btn btn-ghost btn-icon"
-              onClick={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
-              aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
-              title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
-            >
-              {theme === 'dark' ? <IconSun size={17} /> : <IconMoon size={17} />}
-            </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="menu-item"
+                    onClick={() => {
+                      setTheme((t) => (t === 'dark' ? 'light' : 'dark'));
+                      setSettingsOpen(false);
+                    }}
+                  >
+                    {theme === 'dark' ? <IconSun size={16} /> : <IconMoon size={16} />}
+                    <span>{theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}</span>
+                  </button>
+
+                  <div className="menu-divider" role="separator" />
+
+                  <a
+                    role="menuitem"
+                    className="menu-item"
+                    href={GITHUB_PROFILE_URL}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={() => setSettingsOpen(false)}
+                  >
+                    <IconGithub size={16} />
+                    <span>GitHub</span>
+                  </a>
+
+                  <a
+                    role="menuitem"
+                    className="menu-item"
+                    href={WHATSAPP_URL}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={() => setSettingsOpen(false)}
+                  >
+                    <IconPhone size={16} />
+                    <span>WhatsApp</span>
+                  </a>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </header>
@@ -398,6 +518,10 @@ function App() {
               allClasses={allClasses}
               selectedClasses={selectedClasses}
               setSelectedClasses={setSelectedClasses}
+              overrides={overrides}
+              setOverrides={setOverrides}
+              extraClasses={extraClasses}
+              setExtraClasses={setExtraClasses}
               courseColors={courseColors}
               activeProfile={activeProfile}
               profileCount={PROFILE_COUNT}
@@ -407,6 +531,8 @@ function App() {
             <NowNext
               data={timetableData}
               selectedClasses={selectedClasses}
+              overrides={overrides}
+              extraClasses={extraClasses}
               isMainProfile={activeProfile === 'main'}
               onClassEnded={notif.markCurrentEnded}
               manualEndedKey={notif.manualEndedKey}
@@ -416,6 +542,8 @@ function App() {
               <TimetableGrid
                 data={timetableData}
                 selectedClasses={selectedClasses}
+                overrides={overrides}
+                extraClasses={extraClasses}
                 courseColors={courseColors}
                 isDark={theme === 'dark'}
               />

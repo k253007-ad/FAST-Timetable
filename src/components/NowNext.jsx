@@ -7,10 +7,10 @@ import { buildSchedule, cleanRoom, sessionKey } from '../utils/schedule.js';
  * than reaching into tomorrow (the grid's own now/next cell highlighting
  * still looks across the whole week; this card is a same-day summary).
  */
-const NowNext = ({ data, selectedClasses, isMainProfile, onClassEnded, manualEndedKey }) => {
+const NowNext = ({ data, selectedClasses, overrides, extraClasses, isMainProfile, onClassEnded, manualEndedKey }) => {
   const { processedSchedule } = useMemo(
-    () => buildSchedule(data, selectedClasses),
-    [data, selectedClasses]
+    () => buildSchedule(data, selectedClasses, overrides, extraClasses),
+    [data, selectedClasses, overrides, extraClasses]
   );
 
   if (!data?.timetable || selectedClasses.length === 0) return null;
