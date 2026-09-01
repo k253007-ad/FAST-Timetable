@@ -30,6 +30,138 @@ export const cleanRoom = (room) =>
     .replace(/\s*\(\d+\)\s*$/, '') // strip trailing seating capacity, e.g. "(50)"
     .trim();
 
+const ROMAN_BUILDING = { I: '1', II: '2', III: '3', IV: '4', V: '5' };
+
+// "AB2 Room D25" -> "AB2", "Academic Block II Electronics Lab" -> "AB2" (a
+// handful of lab venues in the sheet spell the building out with a roman
+// numeral instead of the usual "AB<n>" short form) — anything that matches
+// neither falls into a synthetic "Other" bucket rather than being dropped.
+const getBuildingLabel = (room) => {
+  const short = room.match(/^AB\s*(\d+)/i);
+  if (short) return `AB${short[1]}`;
+  const spelled = room.match(/^Academic Block\s+(I{1,3}|IV|V)\b/i);
+  if (spelled) return `AB${ROMAN_BUILDING[spelled[1].toUpperCase()] || spelled[1]}`;
+  return 'Other';
+};
+
+/**
+ * Groups every distinct Room string in `data` for the classroom picker used
+ * by "Adjust class times" and "Add extra class": `{ [building]: { labs:
+ * [rawRoom, ...], classes: { [letter]: [{ raw, number }, ...] } } }`.
+ * Buildings are derived from the data itself (not hardcoded to AB1/AB2) so a
+ * new building in the sheet just shows up as another option.
+ *
+ * A room counts as a "lab" if its raw label doesn't contain the word "room"
+ * at all (matches this sheet's own naming: "AB1 Lab 2", "Academic Block II
+ * Physics Lab") — labs are listed flat, no letter/number split, since
+ * they're not laid out on a lettered grid the way classrooms are.
+ *
+ * A "classroom" (label does contain "room") is parsed into a letter + number
+ * by stripping the building prefix and the word "room" and matching
+ * `letters` + `digits` (e.g. "E1", "R109"). A label that doesn't fit that
+ * shape (e.g. the sheet's own "AB1 Room LLC", or "AB2RoomEng Lang") becomes
+ * its own "letter" bucket with `number: null` — the picker skips the number
+ * step for any bucket where every entry has no number, which naturally
+ * covers LLC-style single-room buckets without a special case.
+ */
+export const getRoomOptions = (data) => {
+  if (!data?.timetable) return {};
+  const rooms = [...new Set(data.timetable.map((item) => item.Room).filter((r) => r && r !== 'N/A'))];
+
+  const buildings = {};
+  rooms.forEach((raw) => {
+    const building = getBuildingLabel(raw);
+    if (!buildings[building]) buildings[building] = { labs: [], classes: {} };
+
+    if (!/room/i.test(raw)) {
+      buildings[building].labs.push(raw);
+      return;
+    }
+
+    const suffix = raw
+      .replace(/^AB\s*\d+/i, '')
+      .replace(/^Academic Block\s+(I{1,3}|IV|V)\b/i, '')
+      .replace(/room/i, '')
+      .trim();
+    const match = suffix.match(/^([A-Za-z]+)\s*(\d+)$/);
+    const letter = (match ? match[1] : suffix).toUpperCase() || 'OTHER';
+    const number = match ? match[2] : null;
+
+    if (!buildings[building].classes[letter]) buildings[building].classes[letter] = [];
+    buildings[building].classes[letter].push({ raw, number });
+  });
+
+  Object.values(buildings).forEach((b) => {
+    b.labs.sort();
+    Object.values(b.classes).forEach((entries) =>
+      entries.sort((a, c) => Number(a.number || 0) - Number(c.number || 0))
+    );
+  });
+
+  return buildings;
+};
+
+/**
+ * Reverse-lookup: given a raw Room string, finds where it sits in
+ * `getRoomOptions`'s output — `{ building, type, letter, number, labRoom }`
+ * (`type` is `'class'` or `'lab'`; whichever of letter/number vs labRoom
+ * doesn't apply is `''`), or `null` if the room isn't in the current data.
+ * Used to seed the classroom picker (Adjust class times / Add extra class)
+ * from a session's actual current room instead of always defaulting to the
+ * first building/type/letter.
+ */
+export const locateRoom = (roomOptions, raw) => {
+  if (!raw) return null;
+  for (const building of Object.keys(roomOptions)) {
+    const group = roomOptions[building];
+    if (group.labs.includes(raw)) return { building, type: 'lab', letter: '', number: '', labRoom: raw };
+    for (const letter of Object.keys(group.classes)) {
+      const found = group.classes[letter].find((e) => e.raw === raw);
+      if (found) return { building, type: 'class', letter, number: found.number || '', labRoom: '' };
+    }
+  }
+  return null;
+};
+
+/**
+ * Fills in a possibly-partial/stale `{ building, type, letter, number,
+ * labRoom }` selection (as picked by the cascading classroom UI) with valid
+ * fallbacks and resolves it to one real raw Room string — same "derive a
+ * valid value at render time instead of syncing state via an effect"
+ * approach as ClassSelector's `effectiveExtraCourse`/`effectiveExtraSlot`.
+ * A letter bucket with no numbered entries (e.g. "AB1 Room LLC") resolves
+ * straight to its one room, skipping the number step entirely.
+ */
+export const resolveRoomSelection = (roomOptions, sel = {}) => {
+  const buildingKeys = Object.keys(roomOptions).sort();
+  const building = buildingKeys.includes(sel.building) ? sel.building : buildingKeys[0] || '';
+  const group = roomOptions[building] || { labs: [], classes: {} };
+  const hasLabs = group.labs.length > 0;
+  const hasClasses = Object.keys(group.classes).length > 0;
+  const type =
+    sel.type === 'lab' && hasLabs ? 'lab' : sel.type === 'class' && hasClasses ? 'class' : hasClasses ? 'class' : 'lab';
+
+  if (type === 'lab') {
+    const labRoom = group.labs.includes(sel.labRoom) ? sel.labRoom : group.labs[0] || '';
+    return { building, type, letter: '', number: '', labRoom, resolvedRoom: labRoom };
+  }
+
+  const classLetters = Object.keys(group.classes).sort();
+  const letter = classLetters.includes(sel.letter) ? sel.letter : classLetters[0] || '';
+  const entries = group.classes[letter] || [];
+  const numbered = entries.filter((e) => e.number !== null);
+  let number = '';
+  let resolvedRoom = '';
+  if (numbered.length > 0) {
+    const found = numbered.find((e) => e.number === sel.number);
+    number = found ? found.number : numbered[0]?.number || '';
+    resolvedRoom = (found || numbered[0])?.raw || '';
+  } else {
+    resolvedRoom = entries[0]?.raw || '';
+  }
+  return { building, type, letter, number, labRoom: '', resolvedRoom };
+};
+
 const ABBR_STOPWORDS = new Set([
   'of', 'and', 'the', 'in', 'for', 'to', 'on', 'with', 'a', 'an', 'i', 'ii', 'iii',
 ]);
@@ -126,14 +258,52 @@ export const getAllTimeSlots = (data) => {
 };
 
 /**
+ * Live "Course - Section" list for one roll number / section, read fresh
+ * from `data` every time it's called — backs the "keep synced" feature
+ * (App.jsx): unlike a one-time group-select (which just adds a fixed list of
+ * classes once), a synced roll no/section is re-resolved against whatever
+ * the sheet currently says, so a course added/dropped/changed for that roll
+ * no or section is picked up automatically on the next data refresh.
+ * Returns `null` (not `[]`) when the relevant data source isn't loaded at
+ * all, so a caller can tell "nothing to sync yet" apart from "sheet says
+ * this roll no/section now has zero classes" (a real, meaningful state once
+ * the source data exists — the sync should overwrite existing entries).
+ */
+export const getClassesForRollNo = (data, rollNo) => {
+  if (!rollNo || !data?.rollNumbers?.length) return null;
+  const normalized = rollNo.trim().toLowerCase();
+  const classes = new Set();
+  data.rollNumbers.forEach((item) => {
+    if ((item.RollNo || '').trim().toLowerCase() === normalized) {
+      classes.add(`${item.Course} - ${item.Section}`);
+    }
+  });
+  return [...classes];
+};
+
+export const getClassesForSection = (data, section) => {
+  if (!section || !data?.timetable?.length) return null;
+  const normalized = section.trim().toLowerCase();
+  const classes = new Set();
+  data.timetable.forEach((item) => {
+    if ((item.Section || '').trim().toLowerCase() === normalized) {
+      classes.add(`${item.Course} - ${item.Section}`);
+    }
+  });
+  return [...classes];
+};
+
+/**
  * Manual per-device time overrides ("my class moved from Wednesday slot 4 to
  * Thursday slot 7") — the shared sheet is updated manually and can lag real
  * schedule changes, so this lets a student correct just their own view
  * without touching the shared data. Each override is one raw timetable row's
- * worth of relocation: `{ course, section, day, time, newDay, newTime }`.
- * A multi-slot lab moved as a block becomes several of these, one per raw
- * slot it occupies — see buildMoveOverrides below, which is what actually
- * generates them from a UI "move this session" action.
+ * worth of relocation: `{ course, section, day, time, newDay, newTime,
+ * newRoom? }`. `newRoom` (added 2026-09-01, alongside the classroom picker)
+ * is optional — omitted, the row keeps its original Room. A multi-slot lab
+ * moved as a block becomes several of these, one per raw slot it occupies —
+ * see buildMoveOverrides below, which is what actually generates them from a
+ * UI "move this session" action.
  */
 export const applyOverrides = (items, overrides) => {
   if (!overrides || overrides.length === 0) return items;
@@ -141,7 +311,13 @@ export const applyOverrides = (items, overrides) => {
     const match = overrides.find(
       (o) => o.course === item.Course && o.section === item.Section && o.day === item.Day && o.time === item.Time
     );
-    return match ? { ...item, Day: match.newDay, Time: match.newTime } : item;
+    if (!match) return item;
+    return {
+      ...item,
+      Day: match.newDay,
+      Time: match.newTime,
+      ...(match.newRoom ? { Room: match.newRoom } : {}),
+    };
   });
 };
 
@@ -173,15 +349,15 @@ export const getClassOccurrences = (data, selectedClasses) => {
     selectedClasses.includes(`${item.Course} - ${item.Section}`)
   );
 
-  const groups = new Map(); // "Course|Section|Day" -> Set of distinct Time strings
+  const groups = new Map(); // "Course|Section|Day" -> { times: Set of distinct Time strings, room }
   relevant.forEach((item) => {
     const key = `${item.Course}|${item.Section}|${item.Day}`;
-    if (!groups.has(key)) groups.set(key, new Set());
-    groups.get(key).add(item.Time);
+    if (!groups.has(key)) groups.set(key, { times: new Set(), room: item.Room });
+    groups.get(key).times.add(item.Time);
   });
 
   const occurrences = [];
-  groups.forEach((timeSet, key) => {
+  groups.forEach(({ times: timeSet, room }, key) => {
     const [course, section, day] = key.split('|');
     const times = [...timeSet].sort((a, b) => slotIndex.get(a) - slotIndex.get(b));
     let run = [times[0]];
@@ -189,11 +365,11 @@ export const getClassOccurrences = (data, selectedClasses) => {
       if (slotIndex.get(times[i]) === slotIndex.get(run[run.length - 1]) + 1) {
         run.push(times[i]);
       } else {
-        occurrences.push({ course, section, day, slots: run });
+        occurrences.push({ course, section, day, slots: run, room });
         run = [times[i]];
       }
     }
-    occurrences.push({ course, section, day, slots: run });
+    occurrences.push({ course, section, day, slots: run, room });
   });
 
   return occurrences.sort(
@@ -205,13 +381,14 @@ export const getClassOccurrences = (data, selectedClasses) => {
 };
 
 /**
- * Turns a "move this occurrence to {newDay} starting at {newStartSlot}" UI
- * action into the raw per-slot override entries `applyOverrides` expects —
- * one per slot the occurrence spans, kept in the same relative order.
- * Returns null if the day doesn't have enough slots left from newStartSlot
- * to fit the whole occurrence.
+ * Turns a "move this occurrence to {newDay} starting at {newStartSlot}
+ * (optionally also into {newRoom})" UI action into the raw per-slot override
+ * entries `applyOverrides` expects — one per slot the occurrence spans, kept
+ * in the same relative order. Returns null if the day doesn't have enough
+ * slots left from newStartSlot to fit the whole occurrence. `newRoom` is
+ * optional — pass a falsy value to leave the occurrence's Room unchanged.
  */
-export const buildMoveOverrides = (occurrence, timeSlots, newDay, newStartSlot) => {
+export const buildMoveOverrides = (occurrence, timeSlots, newDay, newStartSlot, newRoom) => {
   const startIdx = timeSlots.indexOf(newStartSlot);
   if (startIdx === -1) return null;
   const targetSlots = timeSlots.slice(startIdx, startIdx + occurrence.slots.length);
@@ -223,6 +400,7 @@ export const buildMoveOverrides = (occurrence, timeSlots, newDay, newStartSlot) 
     time,
     newDay,
     newTime: targetSlots[i],
+    ...(newRoom ? { newRoom } : {}),
   }));
 };
 
@@ -230,13 +408,17 @@ export const buildMoveOverrides = (occurrence, timeSlots, newDay, newStartSlot) 
  * A one-off "extra class" — a single additional occurrence of an
  * already-selected course/section (a makeup lecture, an extra revision
  * session, etc.), added for one specific day/slot rather than as a
- * recurring weekly change like an override. `{ course, section, day, time }`
- * is all a UI action needs to specify; `buildExtraRows` below fills in the
- * Instructor/Room by copying them from that course's own real timetable row
- * (there's no source-of-truth row for a slot that doesn't officially exist).
- * The app has no real calendar/date model — everything is a recurring
- * weekly grid — so "only for this week" is enforced by the student manually
- * removing it once the week is over, not by any date logic here.
+ * recurring weekly change like an override. `{ course, section, day, time,
+ * room? }` is all a UI action needs to specify; `buildExtraRows` below fills
+ * in the Instructor/Room by copying them from that course's own real
+ * timetable row (there's no source-of-truth row for a slot that doesn't
+ * officially exist) unless `room` was explicitly picked (added 2026-09-01,
+ * alongside the classroom picker), in which case that overrides the copied
+ * Room. The app has no real calendar/date model — everything is a recurring
+ * weekly grid, so an extra is only ever "this week's Monday" etc., never a
+ * specific date — **auto-removed once its own slot has passed** (see
+ * `isExtraExpired` below, added 2026-09-01) rather than requiring the
+ * student to remember to delete it themselves.
  */
 export const buildExtraRows = (data, extraClasses) => {
   if (!data?.timetable || !extraClasses || extraClasses.length === 0) return [];
@@ -250,10 +432,56 @@ export const buildExtraRows = (data, extraClasses) => {
         ...template,
         Day: extra.day,
         Time: extra.time,
+        ...(extra.room ? { Room: extra.room } : {}),
         isExtra: true,
       };
     })
     .filter(Boolean);
+};
+
+/**
+ * True once an extra class's one-off slot has already ended relative to
+ * `now` — the trigger for automatically removing it (App.jsx) instead of
+ * leaving it for the student to delete by hand. Since an extra only ever
+ * carries a weekday name (no real date), "passed" means: an earlier weekday
+ * than today (already happened this week), or today's own weekday with an
+ * end time at or before the current clock time. A day name outside
+ * DAY_ORDER (shouldn't happen — extras are only ever added via the
+ * DAY_ORDER picker) is treated as not-yet-expired rather than risking an
+ * incorrect auto-delete.
+ *
+ * `extra.time` is only ever the *first* slot it was added at (see
+ * buildExtraRows) — for a lab, the real session runs 3 slots, so its true
+ * end is 2 slots later than `extra.time`'s own end. `data` (optional) lets
+ * this look that up the same way buildSchedule's own merge logic decides
+ * "is this a lab" (Room or Course containing "lab"); without `data`, this
+ * falls back to just `extra.time`'s own end, which is only wrong (early) for
+ * labs specifically.
+ */
+export const isExtraExpired = (extra, now, data) => {
+  const todayIdx = DAY_ORDER.indexOf(now.toLocaleDateString('en-US', { weekday: 'long' }));
+  const extraIdx = DAY_ORDER.indexOf(extra.day);
+  if (todayIdx === -1 || extraIdx === -1) return false;
+  if (extraIdx < todayIdx) return true;
+  if (extraIdx > todayIdx) return false;
+
+  let endSlot = extra.time;
+  if (data?.timetable?.length) {
+    const template = data.timetable.find(
+      (item) => item.Course === extra.course && item.Section === extra.section
+    );
+    const room = extra.room || template?.Room;
+    const isLab = (room || '').toLowerCase().includes('lab') || (extra.course || '').toLowerCase().includes('lab');
+    if (isLab) {
+      const slots = getAllTimeSlots(data);
+      const idx = slots.indexOf(extra.time);
+      if (idx !== -1) endSlot = slots[Math.min(idx + 2, slots.length - 1)];
+    }
+  }
+
+  const endMin = toMinutes(formatSlot(endSlot).end);
+  const nowMin = now.getHours() * 60 + now.getMinutes();
+  return nowMin >= endMin;
 };
 
 /**
@@ -309,7 +537,10 @@ export const buildSchedule = (data, selectedClasses, overrides = [], extraClasse
   });
 
   // Merge consecutive identical sessions into one wider cell.
-  // Labs always occupy three slots; any different class sitting inside a
+  // A session is a 3-slot lab if it's held in a Lab room OR its course name
+  // says "Lab" (either signal alone is enough — some labs meet in a
+  // non-"Lab"-named room, some "... Lab" courses are still named that way in
+  // rooms lacking "Lab" in the label); any different class sitting inside a
   // lab's window is folded into the same cell so it stays visible (clash).
   const processedSchedule = {};
   let clashCount = 0;
@@ -326,7 +557,10 @@ export const buildSchedule = (data, selectedClasses, overrides = [], extraClasse
         let colSpan = 1;
         let cellClasses = classesInSlot;
 
-        if (classItem.Course.toLowerCase().includes('lab')) {
+        if (
+          (classItem.Room || '').toLowerCase().includes('lab') ||
+          (classItem.Course || '').toLowerCase().includes('lab')
+        ) {
           colSpan = Math.min(3, timeSlots.length - i);
           const merged = [...classesInSlot];
           for (let k = i + 1; k < i + colSpan; k++) {

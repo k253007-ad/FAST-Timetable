@@ -5,6 +5,7 @@ import ClassSelector from './components/ClassSelector.jsx';
 import NowNext from './components/NowNext.jsx';
 import { fetchData } from './services/dataService.js';
 import { assignCourseColors } from './utils/courseColors.js';
+import { DAY_ORDER, getClassesForRollNo, getClassesForSection, isExtraExpired } from './utils/schedule.js';
 import { useClassNotifications } from './hooks/useClassNotifications.js';
 import {
   BrandMark,
@@ -104,12 +105,43 @@ const getSavedExtras = (profile) => {
   }
 };
 
+// "Keep synced" (2026-09-01, redesigned same day to full-replace semantics
+// after feedback) — a per-profile link to exactly one live roll number OR
+// one live section: `{ type: 'rollno'|'section', value: string } | null`.
+// Picking a roll no/section **replaces the entire selection** with that
+// group's current classes (not merged with whatever was selected before) —
+// simpler than the original add/remove-diff design, and matches "syncing"
+// meaning "your selection IS this roll no/section," full stop. The same
+// resolve-and-replace effect below runs both the first time it's picked and
+// on every later data load/refresh, so it doesn't need its own snapshot
+// bookkeeping — the current live group is always the whole answer.
+const getSyncStorageKey = (profile) => {
+  if (profile === 'main') return 'linkedSync_main';
+  return profile === 1 ? 'linkedSync' : `linkedSync_${profile}`;
+};
+
+const getSavedSync = (profile) => {
+  try {
+    const saved = localStorage.getItem(getSyncStorageKey(profile));
+    return saved ? JSON.parse(saved) : null;
+  } catch {
+    return null;
+  }
+};
+
 const timeAgo = (date, now) => {
   const mins = Math.floor((now - date.getTime()) / 60000);
   if (mins < 1) return 'just now';
   if (mins < 60) return `${mins} min ago`;
   const hours = Math.floor(mins / 60);
   return hours === 1 ? '1 hour ago' : `${hours} hours ago`;
+};
+
+// Falls back to Monday on a weekend, since the grid/day-picker only ever
+// covers DAY_ORDER (Monday-Friday).
+const getTodayName = () => {
+  const name = new Date().toLocaleDateString('en-US', { weekday: 'long' });
+  return DAY_ORDER.includes(name) ? name : DAY_ORDER[0];
 };
 
 function App() {
@@ -129,6 +161,15 @@ function App() {
   );
   const [overrides, setOverrides] = useState(() => getSavedOverrides(getSavedActiveProfile()));
   const [extraClasses, setExtraClasses] = useState(() => getSavedExtras(getSavedActiveProfile()));
+  const [linkedSync, setLinkedSync] = useState(() => getSavedSync(getSavedActiveProfile()));
+  // Today/Full Week grid view (added 2026-09-01, moved into its own visible
+  // box between NowNext and the grid per feedback that the small in-grid
+  // toggle wasn't visible enough) — 'week' is the default/existing full-grid
+  // behavior; 'day' shows just one day's schedule top-to-bottom, defaulting
+  // to today but browsable to any weekday via the day picker that appears
+  // alongside it. Clicking "Today" always jumps back to the real today.
+  const [gridView, setGridView] = useState('week');
+  const [gridDay, setGridDay] = useState(getTodayName);
 
   const captureRef = useRef(null);
   const exportMenuRef = useRef(null);
@@ -175,11 +216,44 @@ function App() {
     }
   }, [extraClasses, activeProfile]);
 
+  useEffect(() => {
+    try {
+      const key = getSyncStorageKey(activeProfile);
+      if (linkedSync) localStorage.setItem(key, JSON.stringify(linkedSync));
+      else localStorage.removeItem(key);
+    } catch {
+      /* storage unavailable */
+    }
+  }, [linkedSync, activeProfile]);
+
+  // "Keep synced" — whenever the profile has a linked roll no/section,
+  // re-resolves it against whatever `timetableData` currently holds
+  // (initial load, hourly auto-refresh, manual refresh) and **replaces
+  // `selectedClasses` outright** with that group's current classes — this
+  // is what makes syncing mean "your selection IS this roll no/section,"
+  // not "these classes are also included." Runs on the very first pick too
+  // (setLinkedSync itself is a dependency), so there's no separate
+  // "apply once immediately" code path. `null` from getClassesForRollNo/
+  // getClassesForSection means the relevant data source isn't loaded yet
+  // (skip — don't wipe the selection over a transient gap); `[]` means it
+  // loaded and this roll no/section genuinely has zero classes right now,
+  // which is a real state to apply.
+  useEffect(() => {
+    if (!timetableData || !linkedSync) return;
+    const live =
+      linkedSync.type === 'rollno'
+        ? getClassesForRollNo(timetableData, linkedSync.value)
+        : getClassesForSection(timetableData, linkedSync.value);
+    if (live === null) return;
+    setSelectedClasses(live);
+  }, [timetableData, activeProfile, linkedSync]);
+
   const switchProfile = useCallback((profile) => {
     setActiveProfile(profile);
     setSelectedClasses(getSavedClasses(profile));
     setOverrides(getSavedOverrides(profile));
     setExtraClasses(getSavedExtras(profile));
+    setLinkedSync(getSavedSync(profile));
   }, []);
 
   // Apply + persist theme.
@@ -231,6 +305,19 @@ function App() {
     const tick = setInterval(() => setNow(Date.now()), 60000);
     return () => clearInterval(tick);
   }, []);
+
+  // Auto-remove one-off "extra classes" once their slot has passed — the
+  // app has no calendar/date model, so an extra is only ever meant for
+  // "this week"; this replaces the student having to remember to delete it
+  // by hand (isExtraExpired, schedule.js). Piggybacks on the 60s `now`
+  // ticker above rather than its own interval.
+  useEffect(() => {
+    setExtraClasses((prev) => {
+      const nowDate = new Date();
+      const next = prev.filter((e) => !isExtraExpired(e, nowDate, timetableData));
+      return next.length === prev.length ? prev : next;
+    });
+  }, [now, timetableData]);
 
   // Close the export menu on outside click / Escape.
   useEffect(() => {
@@ -526,6 +613,8 @@ function App() {
               activeProfile={activeProfile}
               profileCount={PROFILE_COUNT}
               onSwitchProfile={switchProfile}
+              linkedSync={linkedSync}
+              setLinkedSync={setLinkedSync}
             />
 
             <NowNext
@@ -538,6 +627,45 @@ function App() {
               manualEndedKey={notif.manualEndedKey}
             />
 
+            <section className="card view-toggle-card no-print">
+              <div className="view-toggle">
+                <button
+                  type="button"
+                  className={`view-tab${gridView === 'day' ? ' is-active' : ''}`}
+                  onClick={() => {
+                    setGridView('day');
+                    setGridDay(getTodayName());
+                  }}
+                >
+                  Today
+                </button>
+                <button
+                  type="button"
+                  className={`view-tab${gridView === 'week' ? ' is-active' : ''}`}
+                  onClick={() => setGridView('week')}
+                >
+                  Full Week
+                </button>
+              </div>
+
+              {gridView === 'day' && (
+                <div className="day-picker" role="tablist" aria-label="Choose a day">
+                  {DAY_ORDER.map((d) => (
+                    <button
+                      key={d}
+                      type="button"
+                      role="tab"
+                      aria-selected={gridDay === d}
+                      className={`day-tab${gridDay === d ? ' is-active' : ''}`}
+                      onClick={() => setGridDay(d)}
+                    >
+                      {d}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </section>
+
             <div ref={captureRef} data-capture className="capture-area">
               <TimetableGrid
                 data={timetableData}
@@ -546,6 +674,8 @@ function App() {
                 extraClasses={extraClasses}
                 courseColors={courseColors}
                 isDark={theme === 'dark'}
+                viewMode={gridView}
+                selectedDay={gridDay}
               />
             </div>
           </>

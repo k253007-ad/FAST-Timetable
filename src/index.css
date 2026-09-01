@@ -586,22 +586,16 @@ button {
   padding-right: 2px;
 }
 
-.extra-form {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-}
-
-.extra-course-select {
-  flex: 1 1 200px;
-  max-width: 100%;
-}
+/* "Add extra class" now reuses .reschedule-edit-panel (same bordered box as
+   "Adjust class times") for visual/structural parity, and its course field
+   is CourseCombobox (ClassSelector.jsx) — the same searchable combobox
+   pattern as the Course tab's own search, replacing a plain <select> whose
+   long option text could overflow a narrow phone screen. */
 
 .reschedule-row {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 8px 14px;
   padding: 10px 12px;
@@ -614,6 +608,7 @@ button {
   display: flex;
   flex-direction: column;
   gap: 2px;
+  flex: 1 1 200px;
   min-width: 0;
 }
 
@@ -641,6 +636,47 @@ button {
   gap: 6px;
 }
 
+/* "Edit" (Adjust class times) and "Add" (Add extra class) — the primary
+   action in their row/form — get a visible border instead of the plain
+   text-only .link-button look (Reset/Remove still use .link-button). */
+.action-btn {
+  flex-shrink: 0;
+  height: 30px;
+  padding: 0 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-xs);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.action-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+
+/* Move/Update, Cancel, and Change room inside the "Adjust class times" edit
+   panel — a filled blue box, more visible than .action-btn's neutral
+   border, since these are the actions that actually apply/close the edit. */
+.action-btn-blue {
+  flex-shrink: 0;
+  height: 32px;
+  padding: 0 16px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-xs);
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  font-size: 12.5px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.action-btn-blue:hover {
+  background: var(--accent-soft-strong);
+}
+
 .reschedule-select {
   height: 32px;
   padding: 0 8px;
@@ -661,6 +697,92 @@ button {
   outline: none;
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-soft-strong);
+}
+
+/* "Adjust class times" edit panel (added 2026-09-01) — every Day/Time/Room
+   choice is a directly-tappable PillOptions button instead of hidden inside
+   a <select>, opened via the row's "Edit" link. */
+.reschedule-edit-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 100%;
+  gap: 12px;
+  margin-top: 4px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+/* Pairs of related fields side by side — Day+Slot, Building+Room type,
+   Block+Number — instead of each stacked on its own full-width line. */
+.reschedule-field-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.reschedule-field-row > .reschedule-select {
+  flex: 1 1 120px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.reschedule-field-row > .room-field {
+  flex: 1 1 160px;
+  min-width: 0;
+}
+
+.room-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.room-field-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-3);
+}
+
+.pill-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.pill-option {
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text-2);
+  font-size: 12.5px;
+  font-weight: 600;
+  padding: 6px 12px;
+  cursor: pointer;
+  transition: background-color 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+
+.pill-option:hover {
+  border-color: var(--text-3);
+  color: var(--text);
+}
+
+.pill-option.is-active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #ffffff;
+}
+
+.reschedule-edit-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
 }
 
 /* Selector toolbar: mode tabs + minimize + timetable-slot picker */
@@ -909,6 +1031,68 @@ button {
   background: var(--accent-soft);
 }
 
+/* Roll No/Section rows (SyncOptionRow) render as a full-width <button>
+   instead of a <label> — clicking anywhere on the row syncs to it, there's
+   no separate checkbox to target. */
+.option-row-sync {
+  width: 100%;
+  border: none;
+  background: none;
+  font: inherit;
+  text-align: left;
+  justify-content: space-between;
+}
+
+.option-active-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+/* Replaces .mode-tabs + every search combobox entirely while a sync is
+   active (App.jsx/ClassSelector.jsx: "Synced" takes over the whole
+   selection area, not just an indicator alongside it) — clicking it opens
+   the one place syncing can be cancelled, via the shared .info-popover
+   styling. position:relative anchors that popover, same as
+   .reschedule-header does for the other two info popovers. Sized to sit
+   naturally where .mode-tabs was (same row, same flex-column gap from
+   .selector-toolbar). */
+.synced-indicator {
+  position: relative;
+}
+
+.synced-indicator-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--success);
+  border-radius: var(--radius-sm);
+  background: var(--success-soft);
+  color: var(--success-ink);
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  cursor: pointer;
+  text-align: center;
+  transition: background-color 0.12s ease;
+}
+
+.synced-indicator-btn:hover {
+  background: var(--success-soft-strong);
+}
+
+.info-popover .link-button {
+  display: block;
+  margin-top: 8px;
+  color: var(--accent-ink);
+}
+
 .option-text {
   display: flex;
   align-items: baseline;
@@ -963,13 +1147,20 @@ button {
   transform: rotate(45deg);
 }
 
-/* Selected chips */
+/* Selected chips — collapsed behind a "Selected classes (N)" toggle by
+   default (added 2026-09-01), same reasoning as every other progressive-
+   disclosure toggle in this card ("many people dont want to be bombarded
+   with options"): the count-pill in the header already shows how many are
+   selected, so the full chip list is opt-in. */
+.chip-toggle-wrap {
+  margin-top: 12px;
+}
 
 .chip-row {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  margin-top: 14px;
+  margin-top: 10px;
   padding: 0;
   list-style: none;
 }
@@ -1004,23 +1195,25 @@ button {
   line-height: 1.35;
 }
 
+/* Always red (not just on hover) and bigger than the rest of the chip —
+   the remove action should read as obviously destructive at a glance. */
 .chip-remove {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 20px;
-  height: 20px;
+  width: 24px;
+  height: 24px;
   border: none;
   border-radius: 999px;
-  background: transparent;
-  color: var(--text-3);
+  background: var(--danger-soft);
+  color: var(--danger);
   cursor: pointer;
   flex-shrink: 0;
 }
 
 .chip-remove:hover {
-  background: var(--danger-soft);
-  color: var(--danger-ink);
+  background: var(--danger);
+  color: #ffffff;
 }
 
 /* ---------- Now / Next status card ---------- */
@@ -1108,6 +1301,192 @@ button {
   overflow: hidden;
 }
 
+/* Today / Full Week toggle (added 2026-09-01, promoted to its own card the
+   same day after feedback that a small in-grid toggle wasn't visible
+   enough) — lives in App.jsx as a standalone `.view-toggle-card`, between
+   NowNext and the grid. A display preference only: print/export always
+   render the full week grid regardless (see the .exporting/@media print
+   overrides further down) — the card itself carries .no-print and, being
+   outside the [data-capture] area entirely (unlike .day-view, which is
+   still inside the grid card), never needs an .exporting override of its
+   own. */
+.view-toggle-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 18px;
+}
+
+.view-toggle {
+  display: inline-flex;
+  align-self: flex-start;
+  gap: 4px;
+  padding: 4px;
+  background: var(--surface-3);
+  border-radius: var(--radius-sm);
+}
+
+.view-tab {
+  border: none;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 14px;
+  font-weight: 700;
+  padding: 10px 22px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background-color 0.12s ease, color 0.12s ease, box-shadow 0.12s ease;
+}
+
+.view-tab:hover {
+  color: var(--text);
+}
+
+.view-tab.is-active {
+  background: var(--accent);
+  color: #ffffff;
+  box-shadow: var(--shadow-sm);
+}
+
+/* Day picker — only rendered while the "Today" (day) view is active, lets
+   the student browse any weekday, not just the real current one. Fades in
+   on mount (see .day-view's own fade-in for why) rather than popping in. */
+.day-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  animation: viewFadeIn 0.2s ease;
+}
+
+.day-tab {
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text-2);
+  font-size: 12.5px;
+  font-weight: 600;
+  padding: 7px 14px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background-color 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+
+.day-tab:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.day-tab.is-active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+
+/* Vertical top-to-bottom agenda for just today (the Today view's content) —
+   reuses .class-box/.extra-badge/.class-course/.class-meta as-is so a class
+   card looks identical to its grid counterpart. Fades/slides in on mount
+   (added 2026-09-01, alongside the day picker below, after feedback that
+   switching Today/Full Week felt "glitchy" — an abrupt pop-in read as a
+   rendering hiccup even though nothing was actually broken). */
+.day-view {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 14px 18px 18px;
+  animation: viewFadeIn 0.2s ease;
+}
+
+@keyframes viewFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Time sits above its class card(s), not beside them (added 2026-09-01) —
+   a day-view-row is one vertical block: time (+ Now/Next badge) on top,
+   the class card(s) or "Free" below. */
+.day-view-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.day-view-row:last-child {
+  border-bottom: none;
+}
+
+.day-view-row.is-now {
+  padding-left: 10px;
+  padding-right: 10px;
+  margin: 0 -10px;
+  border-radius: var(--radius-xs);
+  background: var(--success-soft);
+  outline: 2px solid var(--success);
+  outline-offset: -2px;
+}
+
+.day-view-row.is-next {
+  padding-left: 10px;
+  padding-right: 10px;
+  margin: 0 -10px;
+  border-radius: var(--radius-xs);
+  outline: 2px dashed var(--accent);
+  outline-offset: -2px;
+}
+
+.day-view-time {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--text-2);
+}
+
+.day-view-badge {
+  font-size: 9px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  padding: 2px 7px;
+  border-radius: 999px;
+}
+
+.day-view-badge.is-now {
+  color: #ffffff;
+  background: var(--success);
+}
+
+.day-view-badge.is-next {
+  color: var(--accent-ink);
+  background: var(--accent-soft-strong);
+}
+
+.day-view-body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.day-view-free {
+  font-size: 12.5px;
+  color: var(--text-3);
+}
+
+.day-view-empty {
+  padding: 18px;
+  text-align: center;
+  color: var(--text-3);
+  font-size: 13px;
+}
+
 .grid-toolbar {
   display: none;
   align-items: center;
@@ -1164,6 +1543,14 @@ button {
 .tt-scroll {
   overflow: auto;
   -webkit-overflow-scrolling: touch;
+}
+
+/* Hides the full grid on screen while the Today view is active — reset
+   back to visible for export/print (see the "Export capture overrides" and
+   "Print" sections further down), since those always show the full week
+   regardless of the on-screen toggle. */
+.tt-scroll.is-day-view {
+  display: none;
 }
 
 .tt {
@@ -1561,6 +1948,22 @@ button {
   overflow: visible;
 }
 
+/* Today/Full Week is a screen-only display preference (added 2026-09-01) —
+   an export always shows the full week grid regardless of which one is
+   currently selected on screen, so force the grid back on and hide the
+   Today view (.view-toggle-card lives outside [data-capture] entirely now,
+   so it's never part of an export to begin with). .day-view also carries
+   .no-print for the real-print case (@media print below) — .no-print alone
+   does nothing during a PNG/JPG export, since that's html2canvas
+   snapshotting the live DOM, not an actual print media query. */
+.exporting .tt-scroll.is-day-view {
+  display: block;
+}
+
+.exporting .day-view {
+  display: none;
+}
+
 .exporting .tt-head,
 .exporting .tt-corner,
 .exporting .tt-daycell {
@@ -1706,6 +2109,13 @@ button {
 
   .tt-scroll {
     overflow: visible;
+  }
+
+  /* Today/Full Week is screen-only (added 2026-09-01) — a real browser
+     print always prints the full week grid, same reasoning as the
+     .exporting override above. */
+  .tt-scroll.is-day-view {
+    display: block;
   }
 
   .tt-head,

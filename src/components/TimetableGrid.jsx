@@ -26,24 +26,83 @@ const fitCourseLabels = (container) => {
   });
 };
 
-const TimetableGrid = ({ data, selectedClasses, overrides, extraClasses, courseColors, isDark }) => {
+// Merges consecutive empty slots into one combined "Free" block spanning
+// their whole time range, instead of one row per empty slot (added
+// 2026-09-01 — "4 separate Free [rows] in a line" read as noisy; a run of
+// back-to-back free slots is just one open stretch of time). Non-empty
+// cells pass through untouched, one row each, same as before.
+const buildDayRows = (cells) => {
+  const rows = [];
+  let i = 0;
+  while (i < cells.length) {
+    if (!cells[i].isEmpty) {
+      rows.push({ type: 'class', cell: cells[i] });
+      i++;
+      continue;
+    }
+    let j = i;
+    while (j < cells.length && cells[j].isEmpty) j++;
+    rows.push({
+      type: 'free',
+      key: cells[i].slot,
+      span: j - i,
+      startLabel: formatSlot(cells[i].slot).start,
+      endLabel: formatSlot(cells[j - 1].slot).end,
+    });
+    i = j;
+  }
+  return rows;
+};
+
+// "Slot 1" for a single slot, "Slot 1-3" for one spanning several (a lab's
+// colSpan, or a merged run of Free slots) — added 2026-09-01 after feedback
+// that a multi-slot row showing just its first slot's number silently hid
+// how much time it actually occupied.
+const slotRangeLabel = (timeSlots, startSlot, span) => {
+  const startIdx = timeSlots.indexOf(startSlot);
+  const endIdx = startIdx + span - 1;
+  return startIdx === endIdx ? `Slot ${startIdx + 1}` : `Slot ${startIdx + 1}-${endIdx + 1}`;
+};
+
+// `viewMode` ('week' | 'day') and `selectedDay` (which weekday the 'day'
+// view shows) are owned by App.jsx now (added 2026-09-01, moved out of this
+// component into a standalone, more visible toggle box between NowNext and
+// the grid) — this component just renders whichever one it's told to.
+// Print/export always render the full week grid regardless of `viewMode`,
+// via the .exporting/@media print overrides in index.css — see the
+// hard-constraint comment there.
+const TimetableGrid = ({
+  data,
+  selectedClasses,
+  overrides,
+  extraClasses,
+  courseColors,
+  isDark,
+  viewMode,
+  selectedDay,
+}) => {
   const gridRef = useRef(null);
+  const dayViewRef = useRef(null);
   const { days, timeSlots, processedSchedule, sessionCount, courseCount, clashCount } = useMemo(
     () => buildSchedule(data, selectedClasses, overrides, extraClasses),
     [data, selectedClasses, overrides, extraClasses]
   );
 
   // Re-fit course labels after every render that could change them (new
-  // selection, new data) and whenever the grid's own size changes (window
-  // resize, sidebar toggling, browser zoom) — box width is what determines
-  // where text wraps, so a size change can un-fit or re-fit a label.
+  // selection, new data) and whenever either view's own size changes
+  // (window resize, sidebar toggling, browser zoom) — box width is what
+  // determines where text wraps, so a size change can un-fit or re-fit a
+  // label. Covers both the full grid and the Today view's boxes (added
+  // 2026-09-01) — same `.class-course` markup in both, so the same fit
+  // logic applies unchanged; a ref that's currently unmounted (whichever
+  // view isn't showing) is just skipped.
   useEffect(() => {
-    const container = gridRef.current;
-    if (!container) return undefined;
-    fitCourseLabels(container);
-    const refit = () => fitCourseLabels(container);
+    const containers = [gridRef.current, dayViewRef.current].filter(Boolean);
+    if (containers.length === 0) return undefined;
+    containers.forEach(fitCourseLabels);
+    const refit = () => containers.forEach(fitCourseLabels);
     const observer = new ResizeObserver(refit);
-    observer.observe(container);
+    containers.forEach((c) => observer.observe(c));
     // A real browser print can reflow the page at print-time dimensions
     // without firing a resize/ResizeObserver event in every browser, so
     // re-check explicitly when print starts.
@@ -52,7 +111,7 @@ const TimetableGrid = ({ data, selectedClasses, overrides, extraClasses, courseC
       observer.disconnect();
       window.removeEventListener('beforeprint', refit);
     };
-  }, [processedSchedule]);
+  }, [processedSchedule, viewMode]);
 
   if (!data?.timetable) return null;
 
@@ -121,6 +180,21 @@ const TimetableGrid = ({ data, selectedClasses, overrides, extraClasses, courseC
     }
   }
 
+  // Now/Next for the Today view (added 2026-09-01) — deliberately day-scoped
+  // rather than the week-wrapping search above (same "today only" reasoning
+  // as NowNext.jsx): only meaningful when the day actually being browsed is
+  // the real today, since "now" on a different day makes no sense.
+  const dayViewCurrentSlot =
+    selectedDay === today
+      ? processedSchedule[selectedDay]?.find(
+          (cell) => !cell.isEmpty && nowMinutes >= cell.startMin && nowMinutes < cell.endMin
+        )?.slot
+      : undefined;
+  const dayViewNextSlot =
+    selectedDay === today
+      ? processedSchedule[selectedDay]?.find((cell) => !cell.isEmpty && cell.startMin > nowMinutes)?.slot
+      : undefined;
+
   const legendCourses = Object.keys(courseColors).filter((course) =>
     selectedClasses.some((v) => splitClassValue(v).course === course)
   );
@@ -172,7 +246,7 @@ const TimetableGrid = ({ data, selectedClasses, overrides, extraClasses, courseC
         </div>
       )}
 
-      <div className="tt-scroll">
+      <div className={`tt-scroll${viewMode === 'day' ? ' is-day-view' : ''}`}>
         <div
           ref={gridRef}
           className="tt"
@@ -251,6 +325,69 @@ const TimetableGrid = ({ data, selectedClasses, overrides, extraClasses, courseC
           })}
         </div>
       </div>
+
+      {viewMode === 'day' && (
+        <div className="day-view no-print" ref={dayViewRef}>
+          {!(selectedDay in processedSchedule) ? (
+            <p className="day-view-empty">No classes that day.</p>
+          ) : (
+            buildDayRows(processedSchedule[selectedDay]).map((row) => {
+              if (row.type === 'free') {
+                return (
+                  <div key={`free-${row.key}`} className="day-view-row is-empty">
+                    <div className="day-view-time">
+                      {slotRangeLabel(timeSlots, row.key, row.span)} · {row.startLabel}
+                      {row.endLabel && ` – ${row.endLabel}`}
+                    </div>
+                    <div className="day-view-body">
+                      <span className="day-view-free">Free</span>
+                    </div>
+                  </div>
+                );
+              }
+
+              const { cell } = row;
+              const isNow = cell.slot === dayViewCurrentSlot;
+              const isNext = !isNow && cell.slot === dayViewNextSlot;
+              return (
+                <div
+                  key={cell.slot}
+                  className={`day-view-row${cell.classes.length > 1 ? ' is-clash' : ''}${isNow ? ' is-now' : ''}${
+                    isNext ? ' is-next' : ''
+                  }`}
+                >
+                  <div className="day-view-time">
+                    {slotRangeLabel(timeSlots, cell.slot, cell.colSpan)} · {cell.startLabel}
+                    {cell.endLabel && ` – ${cell.endLabel}`}
+                    {isNow && <span className="day-view-badge is-now">Now</span>}
+                    {isNext && <span className="day-view-badge is-next">Next</span>}
+                  </div>
+                  <div className="day-view-body">
+                    {cell.classes.map((classItem, index) => {
+                      const hasSection = classItem.Section !== 'N/A';
+                      const extraSuffix = classItem.isExtra ? ' · Extra, this week only' : '';
+                      return (
+                        <div
+                          key={index}
+                          className={`class-box${classItem.isExtra ? ' is-extra' : ''}`}
+                          style={boxStyle(classItem.Course, classItem.isExtra)}
+                          title={`${classItem.Course} · ${cleanRoom(classItem.Room)}${hasSection ? ` · ${classItem.Section}` : ''} · ${classItem.Instructor}${extraSuffix}`}
+                        >
+                          {classItem.isExtra && <span className="extra-badge">Extra</span>}
+                          <span className="class-course">{classItem.Course}</span>
+                          <span className="class-meta">{cleanRoom(classItem.Room)}</span>
+                          {hasSection && <span className="class-meta">{classItem.Section}</span>}
+                          <span className="class-meta">{classItem.Instructor}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+      )}
     </section>
   );
 };
