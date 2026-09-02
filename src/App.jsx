@@ -5,7 +5,13 @@ import ClassSelector from './components/ClassSelector.jsx';
 import NowNext from './components/NowNext.jsx';
 import { fetchData } from './services/dataService.js';
 import { assignCourseColors } from './utils/courseColors.js';
-import { DAY_ORDER, getClassesForRollNo, getClassesForSection, isExtraExpired } from './utils/schedule.js';
+import {
+  DAY_ORDER,
+  getClassesForRollNo,
+  getClassesForSection,
+  getOccupiedSlots,
+  isExtraExpired,
+} from './utils/schedule.js';
 import { useClassNotifications } from './hooks/useClassNotifications.js';
 import {
   BrandMark,
@@ -105,6 +111,23 @@ const getSavedExtras = (profile) => {
   }
 };
 
+// Personal "activities" (Library, Cafe, Prayer/Namaz, ...) — see "Manage
+// activities" in ClassSelector.jsx, added 2026-09-02. Same per-profile key
+// scheme again, own separate storage.
+const getActivityStorageKey = (profile) => {
+  if (profile === 'main') return 'activities_main';
+  return profile === 1 ? 'activities' : `activities_${profile}`;
+};
+
+const getSavedActivities = (profile) => {
+  try {
+    const saved = localStorage.getItem(getActivityStorageKey(profile));
+    return saved ? JSON.parse(saved) : [];
+  } catch {
+    return [];
+  }
+};
+
 // "Keep synced" (2026-09-01, redesigned same day to full-replace semantics
 // after feedback) — a per-profile link to exactly one live roll number OR
 // one live section: `{ type: 'rollno'|'section', value: string } | null`.
@@ -161,6 +184,7 @@ function App() {
   );
   const [overrides, setOverrides] = useState(() => getSavedOverrides(getSavedActiveProfile()));
   const [extraClasses, setExtraClasses] = useState(() => getSavedExtras(getSavedActiveProfile()));
+  const [activities, setActivities] = useState(() => getSavedActivities(getSavedActiveProfile()));
   const [linkedSync, setLinkedSync] = useState(() => getSavedSync(getSavedActiveProfile()));
   // Today/Full Week grid view (added 2026-09-01, moved into its own visible
   // box between NowNext and the grid per feedback that the small in-grid
@@ -218,6 +242,32 @@ function App() {
 
   useEffect(() => {
     try {
+      localStorage.setItem(getActivityStorageKey(activeProfile), JSON.stringify(activities));
+    } catch {
+      /* storage unavailable */
+    }
+  }, [activities, activeProfile]);
+
+  // Auto-remove an activity the moment it clashes with a real course — a
+  // course added, a manual move, new data from a refresh, or the activity
+  // itself just being added on top of an already-occupied slot can all
+  // trigger this (hence `activities` in the dependency array too, not just
+  // the three things that change a course's own occupied slots). Never the
+  // other way around: a course is never displaced to make room for an
+  // activity. Safe against a re-render loop: when nothing needs removing,
+  // `setActivities` gets back the exact same `prev` reference, so React
+  // bails out instead of re-triggering this effect again.
+  useEffect(() => {
+    if (!timetableData) return;
+    const occupied = getOccupiedSlots(timetableData, selectedClasses, overrides);
+    setActivities((prev) => {
+      const next = prev.filter((a) => !occupied.has(`${a.day}|${a.time}`));
+      return next.length === prev.length ? prev : next;
+    });
+  }, [timetableData, selectedClasses, overrides, activities]);
+
+  useEffect(() => {
+    try {
       const key = getSyncStorageKey(activeProfile);
       if (linkedSync) localStorage.setItem(key, JSON.stringify(linkedSync));
       else localStorage.removeItem(key);
@@ -253,6 +303,7 @@ function App() {
     setSelectedClasses(getSavedClasses(profile));
     setOverrides(getSavedOverrides(profile));
     setExtraClasses(getSavedExtras(profile));
+    setActivities(getSavedActivities(profile));
     setLinkedSync(getSavedSync(profile));
   }, []);
 
@@ -609,6 +660,8 @@ function App() {
               setOverrides={setOverrides}
               extraClasses={extraClasses}
               setExtraClasses={setExtraClasses}
+              activities={activities}
+              setActivities={setActivities}
               courseColors={courseColors}
               activeProfile={activeProfile}
               profileCount={PROFILE_COUNT}
@@ -622,6 +675,7 @@ function App() {
               selectedClasses={selectedClasses}
               overrides={overrides}
               extraClasses={extraClasses}
+              activities={activities}
               isMainProfile={activeProfile === 'main'}
               onClassEnded={notif.markCurrentEnded}
               manualEndedKey={notif.manualEndedKey}
@@ -672,6 +726,7 @@ function App() {
                 selectedClasses={selectedClasses}
                 overrides={overrides}
                 extraClasses={extraClasses}
+                activities={activities}
                 courseColors={courseColors}
                 isDark={theme === 'dark'}
                 viewMode={gridView}

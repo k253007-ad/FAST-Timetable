@@ -29,6 +29,87 @@ export const requestNotificationPermission = async () => {
   }
 };
 
+// applicationServerKey wants a raw Uint8Array, not the base64url string
+// VAPID keys are normally handed around as.
+const urlBase64ToUint8Array = (base64String) => {
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const rawData = atob(base64);
+  return Uint8Array.from([...rawData].map((c) => c.charCodeAt(0)));
+};
+
+export const isPushSupported = () =>
+  typeof window !== 'undefined' && 'serviceWorker' in navigator && 'PushManager' in window;
+
+/**
+ * Sends the Main profile's current selection to the server so
+ * api/notify-tick.js knows what to check for this subscriber. Safe to call
+ * often (e.g. on every relevant state change) — the server just overwrites
+ * its stored copy, keeping the existing notifiedState (dedup bookkeeping)
+ * intact so re-syncing doesn't cause a burst of repeat notifications.
+ */
+export const syncPushSubscription = async (subscription, schedule) => {
+  if (!subscription) return false;
+  try {
+    const res = await fetch('/api/subscribe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ subscription, ...schedule }),
+    });
+    return res.ok;
+  } catch (err) {
+    console.error('Push subscription sync failed:', err);
+    return false;
+  }
+};
+
+/**
+ * Subscribes this device to real Web Push (fires with the app fully
+ * closed — see api/notify-tick.js) and registers it with the server,
+ * reusing an existing browser-level subscription if one's already there
+ * instead of creating a duplicate.
+ */
+export const subscribeToPush = async (schedule) => {
+  const publicKey = import.meta.env.VITE_VAPID_PUBLIC_KEY;
+  if (!isPushSupported() || !publicKey) return null;
+
+  const reg = await navigator.serviceWorker.getRegistration();
+  if (!reg) return null;
+
+  let subscription = await reg.pushManager.getSubscription();
+  if (!subscription) {
+    try {
+      subscription = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(publicKey),
+      });
+    } catch (err) {
+      console.error('Push subscribe failed:', err);
+      return null;
+    }
+  }
+
+  await syncPushSubscription(subscription, schedule);
+  return subscription;
+};
+
+export const unsubscribeFromPush = async () => {
+  if (!isPushSupported()) return;
+  try {
+    const reg = await navigator.serviceWorker.getRegistration();
+    const subscription = await reg?.pushManager.getSubscription();
+    if (!subscription) return;
+    await fetch('/api/subscribe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ subscription, unsubscribe: true }),
+    });
+    await subscription.unsubscribe();
+  } catch (err) {
+    console.error('Push unsubscribe failed:', err);
+  }
+};
+
 /**
  * Shows a real OS notification. Routes through the service worker so
  * `actions` (e.g. "Class Ended") render where the platform supports them;

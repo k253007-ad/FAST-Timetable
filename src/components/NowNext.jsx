@@ -7,10 +7,19 @@ import { buildSchedule, cleanRoom, sessionKey } from '../utils/schedule.js';
  * than reaching into tomorrow (the grid's own now/next cell highlighting
  * still looks across the whole week; this card is a same-day summary).
  */
-const NowNext = ({ data, selectedClasses, overrides, extraClasses, isMainProfile, onClassEnded, manualEndedKey }) => {
+const NowNext = ({
+  data,
+  selectedClasses,
+  overrides,
+  extraClasses,
+  activities,
+  isMainProfile,
+  onClassEnded,
+  manualEndedKey,
+}) => {
   const { processedSchedule } = useMemo(
-    () => buildSchedule(data, selectedClasses, overrides, extraClasses),
-    [data, selectedClasses, overrides, extraClasses]
+    () => buildSchedule(data, selectedClasses, overrides, extraClasses, activities),
+    [data, selectedClasses, overrides, extraClasses, activities]
   );
 
   if (!data?.timetable || selectedClasses.length === 0) return null;
@@ -43,8 +52,15 @@ const NowNext = ({ data, selectedClasses, overrides, extraClasses, isMainProfile
     return `${m}m`;
   };
 
+  // An activity (Library, Prayer/Namaz, ...) has no section/room/instructor
+  // — showing those as "N/A" would read as broken, so they're blank here and
+  // the render helpers below skip a blank meta line entirely rather than
+  // leaving a dangling " · " or an empty line.
   const sessionDetails = (cell) => {
     const item = cell.classes[0];
+    if (item.isActivity) {
+      return { course: item.Course, room: '', instructor: '', start: cell.startLabel, end: cell.endLabel };
+    }
     return {
       course: item.Section !== 'N/A' ? `${item.Course} (${item.Section})` : item.Course,
       room: cleanRoom(item.Room),
@@ -64,9 +80,10 @@ const NowNext = ({ data, selectedClasses, overrides, extraClasses, isMainProfile
             <div className="nownext-body">
               <span className="nownext-course">{course}</span>
               <span className="nownext-meta">
-                {start} – {end} · {room}
+                {start} – {end}
+                {room && ` · ${room}`}
               </span>
-              <span className="nownext-meta">{instructor}</span>
+              {instructor && <span className="nownext-meta">{instructor}</span>}
             </div>
           );
         })()
@@ -83,9 +100,10 @@ const NowNext = ({ data, selectedClasses, overrides, extraClasses, isMainProfile
         <div className="nownext-body">
           <span className="nownext-course">{course}</span>
           <span className="nownext-meta">
-            {start} – {end} · {room}
+            {start} – {end}
+            {room && ` · ${room}`}
           </span>
-          <span className="nownext-meta">{instructor}</span>
+          {instructor && <span className="nownext-meta">{instructor}</span>}
           {isMainProfile && onClassEnded && (
             <button
               type="button"

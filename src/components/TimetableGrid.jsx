@@ -15,6 +15,18 @@ import { IconAlert, IconCalendar } from './Icons.jsx';
 // no-op on mobile, which keeps its fixed size and clamp there.
 const TIER_CLASSES = ['class-course--tier2', 'class-course--tier3'];
 
+// Fixed per-type colours for personal activities (ACTIVITY_TYPES in
+// schedule.js) — deliberately not derived from courseColors, which only
+// knows about real "Course - Section" selections.
+const ACTIVITY_COLORS = {
+  Library: '#0891b2',
+  Cafe: '#d97706',
+  Spot: '#65a30d',
+  Canteen: '#dc2626',
+  'Prayer/Namaz': '#7c3aed',
+  'Touch Grass': '#16a34a',
+};
+
 const fitCourseLabels = (container) => {
   if (!container) return;
   container.querySelectorAll('.class-course').forEach((el) => {
@@ -76,6 +88,7 @@ const TimetableGrid = ({
   selectedClasses,
   overrides,
   extraClasses,
+  activities,
   courseColors,
   isDark,
   viewMode,
@@ -84,8 +97,8 @@ const TimetableGrid = ({
   const gridRef = useRef(null);
   const dayViewRef = useRef(null);
   const { days, timeSlots, processedSchedule, sessionCount, courseCount, clashCount } = useMemo(
-    () => buildSchedule(data, selectedClasses, overrides, extraClasses),
-    [data, selectedClasses, overrides, extraClasses]
+    () => buildSchedule(data, selectedClasses, overrides, extraClasses, activities),
+    [data, selectedClasses, overrides, extraClasses, activities]
   );
 
   // Re-fit course labels after every render that could change them (new
@@ -217,6 +230,55 @@ const TimetableGrid = ({
     };
   };
 
+  // Activities get their own fixed palette (not courseColors — that map is
+  // keyed by real "Course - Section" selections and knows nothing about
+  // activity types) and a dotted outline, a third visual style distinct
+  // from both a real course (solid left-accent) and an extra (dashed).
+  const activityStyle = (type) => {
+    const color = ACTIVITY_COLORS[type] || '#64748b';
+    return {
+      backgroundColor: withAlpha(color, isDark ? 0.14 : 0.08),
+      border: `1.5px dotted ${color}`,
+      borderLeftWidth: '3px',
+    };
+  };
+
+  // Shared by both the full grid and the Today view so a session box never
+  // looks or behaves differently between the two. An activity (Library,
+  // Prayer/Namaz, ...) has no section/room/instructor to show, so its box
+  // is deliberately sparser than a real class's.
+  const renderClassBox = (classItem, index) => {
+    if (classItem.isActivity) {
+      return (
+        <div
+          key={index}
+          className="class-box is-activity"
+          style={activityStyle(classItem.Course)}
+          title={`${classItem.Course} · Personal activity`}
+        >
+          <span className="activity-badge">Activity</span>
+          <span className="class-course">{classItem.Course}</span>
+        </div>
+      );
+    }
+    const hasSection = classItem.Section !== 'N/A';
+    const extraSuffix = classItem.isExtra ? ' · Extra, this week only' : '';
+    return (
+      <div
+        key={index}
+        className={`class-box${classItem.isExtra ? ' is-extra' : ''}`}
+        style={boxStyle(classItem.Course, classItem.isExtra)}
+        title={`${classItem.Course} · ${cleanRoom(classItem.Room)}${hasSection ? ` · ${classItem.Section}` : ''} · ${classItem.Instructor}${extraSuffix}`}
+      >
+        {classItem.isExtra && <span className="extra-badge">Extra</span>}
+        <span className="class-course">{classItem.Course}</span>
+        <span className="class-meta">{cleanRoom(classItem.Room)}</span>
+        {hasSection && <span className="class-meta">{classItem.Section}</span>}
+        <span className="class-meta">{classItem.Instructor}</span>
+      </div>
+    );
+  };
+
   return (
     <section className="card grid-card">
       <div className="grid-toolbar">
@@ -299,24 +361,7 @@ const TimetableGrid = ({
                     >
                       {isNow && <span className="now-badge">Now</span>}
                       {isNext && <span className="next-badge">Next</span>}
-                      {cell.classes.map((classItem, index) => {
-                        const hasSection = classItem.Section !== 'N/A';
-                        const extraSuffix = classItem.isExtra ? ' · Extra, this week only' : '';
-                        return (
-                          <div
-                            key={index}
-                            className={`class-box${classItem.isExtra ? ' is-extra' : ''}`}
-                            style={boxStyle(classItem.Course, classItem.isExtra)}
-                            title={`${classItem.Course} · ${cleanRoom(classItem.Room)}${hasSection ? ` · ${classItem.Section}` : ''} · ${classItem.Instructor}${extraSuffix}`}
-                          >
-                            {classItem.isExtra && <span className="extra-badge">Extra</span>}
-                            <span className="class-course">{classItem.Course}</span>
-                            <span className="class-meta">{cleanRoom(classItem.Room)}</span>
-                            {hasSection && <span className="class-meta">{classItem.Section}</span>}
-                            <span className="class-meta">{classItem.Instructor}</span>
-                          </div>
-                        );
-                      })}
+                      {cell.classes.map((classItem, index) => renderClassBox(classItem, index))}
                     </div>
                   );
                 })}
@@ -363,24 +408,7 @@ const TimetableGrid = ({
                     {isNext && <span className="day-view-badge is-next">Next</span>}
                   </div>
                   <div className="day-view-body">
-                    {cell.classes.map((classItem, index) => {
-                      const hasSection = classItem.Section !== 'N/A';
-                      const extraSuffix = classItem.isExtra ? ' · Extra, this week only' : '';
-                      return (
-                        <div
-                          key={index}
-                          className={`class-box${classItem.isExtra ? ' is-extra' : ''}`}
-                          style={boxStyle(classItem.Course, classItem.isExtra)}
-                          title={`${classItem.Course} · ${cleanRoom(classItem.Room)}${hasSection ? ` · ${classItem.Section}` : ''} · ${classItem.Instructor}${extraSuffix}`}
-                        >
-                          {classItem.isExtra && <span className="extra-badge">Extra</span>}
-                          <span className="class-course">{classItem.Course}</span>
-                          <span className="class-meta">{cleanRoom(classItem.Room)}</span>
-                          {hasSection && <span className="class-meta">{classItem.Section}</span>}
-                          <span className="class-meta">{classItem.Instructor}</span>
-                        </div>
-                      );
-                    })}
+                    {cell.classes.map((classItem, index) => renderClassBox(classItem, index))}
                   </div>
                 </div>
               );

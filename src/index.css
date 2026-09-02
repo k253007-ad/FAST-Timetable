@@ -689,6 +689,12 @@ button {
   cursor: pointer;
 }
 
+/* Shared with the custom-activity name field (a plain text <input>, not a
+   <select>) — same box, but a text cursor instead of a pointer one. */
+input.reschedule-select {
+  cursor: text;
+}
+
 .reschedule-select:hover {
   border-color: var(--text-3);
 }
@@ -1732,7 +1738,8 @@ button {
   min-width: 0;
 }
 
-.extra-badge {
+.extra-badge,
+.activity-badge {
   position: absolute;
   top: -1px;
   right: 4px;
@@ -1746,6 +1753,14 @@ button {
   background: var(--surface);
   border: 1px solid var(--border-strong);
   border-top: none;
+}
+
+/* A personal activity's box has no room/section/instructor to show, so it's
+   just the type name, centered — deliberately sparser than a real
+   class-box or an extra's. */
+.class-box.is-activity {
+  align-items: center;
+  text-align: center;
 }
 
 .class-course {
@@ -1992,8 +2007,11 @@ button {
 /* Extra classes (see utils/schedule.js's buildExtraRows) are a one-off,
    this-week-only addition — never part of the real recurring schedule, so
    they're excluded from both print and exported images, same dual-exclusion
-   pattern as every other new Date()-driven or session-scoped element. */
-.exporting .class-box.is-extra {
+   pattern as every other new Date()-driven or session-scoped element.
+   Activities (buildActivityRows, added 2026-09-02) are personal, not part
+   of the official timetable either — same exclusion. */
+.exporting .class-box.is-extra,
+.exporting .class-box.is-activity {
   display: none;
 }
 
@@ -2149,7 +2167,8 @@ button {
     background-color: transparent;
   }
 
-  .class-box.is-extra {
+  .class-box.is-extra,
+  .class-box.is-activity {
     display: none;
   }
 

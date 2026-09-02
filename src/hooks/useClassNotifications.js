@@ -5,6 +5,9 @@ import {
   notificationPermission,
   requestNotificationPermission,
   showAppNotification,
+  isPushSupported,
+  subscribeToPush,
+  syncPushSubscription,
 } from '../utils/notifications.js';
 
 // Always the *Main* profile's own saved selection, independent of whichever
@@ -15,6 +18,7 @@ import {
 const MAIN_KEY = 'selectedClasses_main';
 const MAIN_OVERRIDES_KEY = 'classOverrides_main';
 const MAIN_EXTRAS_KEY = 'extraClasses_main';
+const MAIN_ACTIVITIES_KEY = 'activities_main';
 const TICK_MS = 20000; // fine enough to catch the "10 minutes left" checkpoint promptly
 
 const getMainClasses = () => {
@@ -49,6 +53,24 @@ const getMainExtras = () => {
     return [];
   }
 };
+
+// Same reasoning again — a personal "activity" (Library, Prayer/Namaz, ...)
+// should notify exactly like a class, for the Main profile only.
+const getMainActivities = () => {
+  try {
+    const saved = localStorage.getItem(MAIN_ACTIVITIES_KEY);
+    return saved ? JSON.parse(saved) : [];
+  } catch {
+    return [];
+  }
+};
+
+const getMainSchedule = () => ({
+  selectedClasses: getMainClasses(),
+  overrides: getMainOverrides(),
+  extraClasses: getMainExtras(),
+  activities: getMainActivities(),
+});
 
 const formatCountdown = (mins) => {
   if (mins <= 0) return 'now';
@@ -86,9 +108,23 @@ export const useClassNotifications = (data) => {
   const endingSoonDiffRef = useRef(new Map()); // session key -> last-seen minutes-to-end
   const startingSoonDiffRef = useRef(new Map()); // session key -> last-seen minutes-to-start
   const lastDayRef = useRef(null);
+  const pushSyncedRef = useRef(null); // last schedule JSON already sent to /api/subscribe
 
   useEffect(() => {
     registerServiceWorker();
+  }, []);
+
+  // A returning user who already granted permission (from before push
+  // support existed, or after clearing just the push subscription without
+  // revoking the OS-level permission) should get resubscribed automatically
+  // — otherwise they'd silently keep the old local-only behavior forever.
+  useEffect(() => {
+    if (notificationPermission() !== 'granted' || !isPushSupported()) return;
+    (async () => {
+      const schedule = getMainSchedule();
+      const sub = await subscribeToPush(schedule);
+      if (sub) pushSyncedRef.current = JSON.stringify(schedule);
+    })();
   }, []);
 
   // Action-button clicks / notification dismissals bounce back from the SW.
@@ -109,6 +145,11 @@ export const useClassNotifications = (data) => {
   const requestPermission = useCallback(async () => {
     const result = await requestNotificationPermission();
     setPermission(result);
+    if (result === 'granted') {
+      const schedule = getMainSchedule();
+      const sub = await subscribeToPush(schedule);
+      if (sub) pushSyncedRef.current = JSON.stringify(schedule);
+    }
     return result;
   }, []);
 
@@ -142,7 +183,26 @@ export const useClassNotifications = (data) => {
       const mainClasses = getMainClasses();
       const mainOverrides = getMainOverrides();
       const mainExtras = getMainExtras();
-      const { processedSchedule } = buildSchedule(data, mainClasses, mainOverrides, mainExtras);
+      const mainActivities = getMainActivities();
+      const { processedSchedule } = buildSchedule(data, mainClasses, mainOverrides, mainExtras, mainActivities);
+
+      // Keep the server's copy of the Main schedule current so
+      // api/notify-tick.js checks against what's actually selected right
+      // now, not whatever was selected when push was first turned on.
+      // Fire-and-forget — this must never block the notification logic
+      // below on a network round trip.
+      if (notificationPermission() === 'granted' && isPushSupported()) {
+        const schedule = { selectedClasses: mainClasses, overrides: mainOverrides, extraClasses: mainExtras, activities: mainActivities };
+        const payload = JSON.stringify(schedule);
+        if (payload !== pushSyncedRef.current) {
+          pushSyncedRef.current = payload;
+          navigator.serviceWorker
+            .getRegistration()
+            .then((reg) => reg?.pushManager.getSubscription())
+            .then((sub) => sub && syncPushSubscription(sub, schedule))
+            .catch(() => {});
+        }
+      }
       const nowMinutes = now.getHours() * 60 + now.getMinutes();
       const sessions = (processedSchedule[today] || []).filter((cell) => !cell.isEmpty);
       const currentCell = sessions.find((cell) => nowMinutes >= cell.startMin && nowMinutes < cell.endMin);
@@ -155,14 +215,17 @@ export const useClassNotifications = (data) => {
       }
       const effectiveCurrentKey = currentKey && manualEndedKeyRef.current === currentKey ? null : currentKey;
 
+      // An activity's Course *is* its display name already (e.g. "Library") —
+      // abbreviateCourse would mangle it (initials of "Prayer/Namaz"), and its
+      // Room is always 'N/A', so both are skipped for activities.
       let currentInfo = null;
       if (effectiveCurrentKey && currentCell) {
         const item = currentCell.classes[0];
         currentInfo = {
           key: effectiveCurrentKey,
           course: item.Course,
-          abbr: abbreviateCourse(item.Course),
-          room: cleanRoom(item.Room),
+          abbr: item.isActivity ? item.Course : abbreviateCourse(item.Course),
+          room: item.isActivity ? '' : cleanRoom(item.Room),
           endLabel: currentCell.endLabel,
           minutesLeft: Math.max(0, currentCell.endMin - nowMinutes),
         };
@@ -174,8 +237,8 @@ export const useClassNotifications = (data) => {
         nextInfo = {
           key: sessionKey(nextCell),
           course: item.Course,
-          abbr: abbreviateCourse(item.Course),
-          room: cleanRoom(item.Room),
+          abbr: item.isActivity ? item.Course : abbreviateCourse(item.Course),
+          room: item.isActivity ? '' : cleanRoom(item.Room),
           startLabel: nextCell.startLabel,
           minutesLeft: Math.max(0, nextCell.startMin - nowMinutes),
         };
@@ -190,7 +253,7 @@ export const useClassNotifications = (data) => {
       if (currentInfo && notifiedNowKeyRef.current !== currentInfo.key) {
         showAppNotification({
           title: `Now: ${currentInfo.abbr}`,
-          body: `${currentInfo.room} · Ends ${currentInfo.endLabel}`,
+          body: currentInfo.room ? `${currentInfo.room} · Ends ${currentInfo.endLabel}` : `Ends ${currentInfo.endLabel}`,
           tag: 'now-class',
           data: { key: currentInfo.key },
           actions: [{ action: 'ended', title: 'End Class' }],
@@ -221,7 +284,7 @@ export const useClassNotifications = (data) => {
       if (!currentInfo && prevCurrentInfo && nextInfo && notifiedEndedKeyRef.current !== prevCurrentInfo.key) {
         showAppNotification({
           title: `${prevCurrentInfo.abbr} ended`,
-          body: `Next: ${nextInfo.abbr} at ${nextInfo.startLabel} · ${nextInfo.room}`,
+          body: `Next: ${nextInfo.abbr} at ${nextInfo.startLabel}${nextInfo.room ? ` · ${nextInfo.room}` : ''}`,
           tag: 'next-class',
           data: { key: nextInfo.key },
         });

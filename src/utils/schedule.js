@@ -8,6 +8,12 @@
 // the weekday list for its "move to..." day picker.
 export const DAY_ORDER = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
 
+// Personal, non-course blocks a student can add to their own timetable (see
+// "Manage activities" in ClassSelector.jsx, added 2026-09-02) — a fixed list
+// rather than free text, so they render/notify consistently and can't be
+// confused with a real course name.
+export const ACTIVITY_TYPES = ['Library', 'Cafe', 'Spot', 'Canteen', 'Prayer/Namaz', 'Touch Grass'];
+
 // Sheet times have no AM/PM marker; anything before 7 is an afternoon class.
 export const toMinutes = (timeStr) => {
   if (!timeStr || !timeStr.includes(':')) return 0;
@@ -485,19 +491,65 @@ export const isExtraExpired = (extra, now, data) => {
 };
 
 /**
+ * A personal "activity" (see ACTIVITY_TYPES above) — `{ type, day, time }`
+ * turned into the same row shape a real timetable entry has, so it flows
+ * through buildSchedule/notifications/NowNext unchanged. `type` doubles as
+ * `Course` (it's what shows as the session's name everywhere); Section/
+ * Instructor/Room are all 'N/A' since none apply — `isActivity: true` is
+ * what the UI checks to skip those fields rather than printing "N/A".
+ */
+export const buildActivityRows = (activities) => {
+  if (!activities || activities.length === 0) return [];
+  return activities.map((activity) => ({
+    Course: activity.type,
+    Section: 'N/A',
+    Instructor: 'N/A',
+    Room: 'N/A',
+    Day: activity.day,
+    Time: activity.time,
+    isActivity: true,
+  }));
+};
+
+/**
+ * Every (Day, Time) slot currently occupied by a *real* course, post-
+ * override, with a lab's full colSpan expanded out to each slot it actually
+ * covers — the definition of "clashes with a course" that activities are
+ * auto-removed against (App.jsx). Deliberately excludes extras and
+ * activities themselves: only an official/moved course session should ever
+ * bump a personal activity off the schedule.
+ */
+export const getOccupiedSlots = (data, selectedClasses, overrides) => {
+  const { timeSlots, processedSchedule } = buildSchedule(data, selectedClasses, overrides);
+  const occupied = new Set();
+  Object.entries(processedSchedule).forEach(([day, cells]) => {
+    cells.forEach((cell) => {
+      if (cell.isEmpty) return;
+      const startIdx = timeSlots.indexOf(cell.slot);
+      for (let k = 0; k < cell.colSpan; k++) {
+        occupied.add(`${day}|${timeSlots[startIdx + k]}`);
+      }
+    });
+  });
+  return occupied;
+};
+
+/**
  * Builds { days, timeSlots, processedSchedule, sessionCount, courseCount, clashCount }
  * for the given timetable data and selection. `processedSchedule[day]` is an
  * ordered array of cells: `{ slot, colSpan, classes, isEmpty }`. `overrides`
  * (see applyOverrides above) relocates specific sessions before the grid is
  * built, so a manually-moved class clashes/merges exactly like a real one
- * scheduled there would. `extraClasses` (see buildExtraRows above) adds
- * one-off sessions on top — they participate in clash detection like any
- * other session, but are flagged `isExtra` so the UI can style/hide them
- * differently (not printed, distinct look) and so their tally is excluded
- * from `sessionCount`/`courseCount` (those numbers are print/export-only —
- * see .grid-toolbar — and should describe what the printed grid shows).
+ * scheduled there would. `extraClasses` (see buildExtraRows above) and
+ * `activities` (see buildActivityRows above, added 2026-09-02) both add
+ * one-off/personal rows on top — they participate in clash detection like
+ * any other session, but are flagged `isExtra`/`isActivity` so the UI can
+ * style/hide them differently (not printed, distinct look) and so their
+ * tally is excluded from `sessionCount`/`courseCount` (those numbers are
+ * print/export-only — see .grid-toolbar — and should describe what the
+ * printed grid shows).
  */
-export const buildSchedule = (data, selectedClasses, overrides = [], extraClasses = []) => {
+export const buildSchedule = (data, selectedClasses, overrides = [], extraClasses = [], activities = []) => {
   if (!data?.timetable) {
     return {
       days: [],
@@ -521,6 +573,7 @@ export const buildSchedule = (data, selectedClasses, overrides = [], extraClasse
       overrides
     ),
     ...buildExtraRows(data, extraClasses),
+    ...buildActivityRows(activities),
   ];
 
   const schedule = {};
@@ -608,8 +661,10 @@ export const buildSchedule = (data, selectedClasses, overrides = [], extraClasse
     days,
     timeSlots,
     processedSchedule,
-    sessionCount: filteredData.filter((item) => !item.isExtra).length,
-    courseCount: new Set(filteredData.filter((item) => !item.isExtra).map((item) => item.Course)).size,
+    sessionCount: filteredData.filter((item) => !item.isExtra && !item.isActivity).length,
+    courseCount: new Set(
+      filteredData.filter((item) => !item.isExtra && !item.isActivity).map((item) => item.Course)
+    ).size,
     clashCount,
   };
 };

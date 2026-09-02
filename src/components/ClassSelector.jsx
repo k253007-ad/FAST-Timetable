@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { splitClassValue, formatClassLabel } from '../utils/courseColors.js';
 import {
+  ACTIVITY_TYPES,
   buildMoveOverrides,
   cleanRoom,
   DAY_ORDER,
@@ -529,6 +530,8 @@ const ClassSelector = ({
   setOverrides,
   extraClasses,
   setExtraClasses,
+  activities,
+  setActivities,
   courseColors,
   activeProfile,
   profileCount,
@@ -554,6 +557,15 @@ const ClassSelector = ({
   const [extraError, setExtraError] = useState('');
   const [showExtraRoomPicker, setShowExtraRoomPicker] = useState(false);
   const [showSyncInfo, setShowSyncInfo] = useState(false);
+  const [showActivities, setShowActivities] = useState(false);
+  const [showActivitiesInfo, setShowActivitiesInfo] = useState(false);
+  const [showActivityList, setShowActivityList] = useState(false);
+  const [activityType, setActivityType] = useState(ACTIVITY_TYPES[0]);
+  const [isCustomActivity, setIsCustomActivity] = useState(false);
+  const [customActivityName, setCustomActivityName] = useState('');
+  const [activityDay, setActivityDay] = useState(DAY_ORDER[0]);
+  const [activitySlot, setActivitySlot] = useState('');
+  const [activityError, setActivityError] = useState('');
   const comboboxRef = useRef(null);
   const inputRef = useRef(null);
   const groupInputRef = useRef(null);
@@ -561,6 +573,7 @@ const ClassSelector = ({
   const extraInfoRef = useRef(null);
   const syncBadgeRef = useRef(null);
   const chipsInfoRef = useRef(null);
+  const activitiesInfoRef = useRef(null);
   const panelId = useId();
   const groupPanelId = useId();
 
@@ -568,6 +581,7 @@ const ClassSelector = ({
   useDismissOnOutside(showExtraInfo, () => setShowExtraInfo(false), extraInfoRef);
   useDismissOnOutside(showSyncInfo, () => setShowSyncInfo(false), syncBadgeRef);
   useDismissOnOutside(showChipsInfo, () => setShowChipsInfo(false), chipsInfoRef);
+  useDismissOnOutside(showActivitiesInfo, () => setShowActivitiesInfo(false), activitiesInfoRef);
 
   // Close on outside click / Escape while the dropdown is open. "Outside"
   // means outside the search box + its panel — not just outside the whole
@@ -729,6 +743,49 @@ const ClassSelector = ({
       prev.filter(
         (e) => !(e.course === extra.course && e.section === extra.section && e.day === extra.day && e.time === extra.time)
       )
+    );
+  };
+
+  // "Manage activities" — personal, non-course blocks (Library, Prayer/
+  // Namaz, or a free-typed custom one) that behave like a class everywhere
+  // else (grid, Now/Next, notifications) but never displace a real one:
+  // App.jsx auto-removes an activity the moment a course ends up in its
+  // slot, so there's no duplicate-clash check needed here beyond "not the
+  // same activity twice".
+  const effectiveActivitySlot = timeSlots.includes(activitySlot) ? activitySlot : timeSlots[0] || '';
+
+  // Always Monday..Friday, Slot 1..9 in the list regardless of add order —
+  // sorted by day index then slot index, not insertion order.
+  const sortedActivities = useMemo(() => {
+    return [...activities].sort((a, b) => {
+      const dayDiff = DAY_ORDER.indexOf(a.day) - DAY_ORDER.indexOf(b.day);
+      if (dayDiff !== 0) return dayDiff;
+      return timeSlots.indexOf(a.time) - timeSlots.indexOf(b.time);
+    });
+  }, [activities, timeSlots]);
+
+  const handleAddActivity = () => {
+    const effectiveType = isCustomActivity ? customActivityName.trim() : activityType;
+    if (!effectiveType) {
+      setActivityError('Enter a name for the custom activity.');
+      return;
+    }
+    if (!effectiveActivitySlot) return;
+    const alreadyAdded = activities.some(
+      (a) => a.type === effectiveType && a.day === activityDay && a.time === effectiveActivitySlot
+    );
+    if (alreadyAdded) {
+      setActivityError('That activity is already added for this day and slot.');
+      return;
+    }
+    setActivityError('');
+    setActivities((prev) => [...prev, { type: effectiveType, day: activityDay, time: effectiveActivitySlot }]);
+    if (isCustomActivity) setCustomActivityName('');
+  };
+
+  const handleRemoveActivity = (activity) => {
+    setActivities((prev) =>
+      prev.filter((a) => !(a.type === activity.type && a.day === activity.day && a.time === activity.time))
     );
   };
 
@@ -1141,7 +1198,7 @@ const ClassSelector = ({
                 onClick={() => setShowChips((v) => !v)}
                 aria-expanded={showChips}
               >
-                Selected classes ({selectedClasses.length})
+                Selected courses ({selectedClasses.length})
                 <IconChevronDown size={13} className={showChips ? 'is-flipped' : undefined} />
               </button>
 
@@ -1384,6 +1441,144 @@ const ClassSelector = ({
                       </div>
                       <div className="reschedule-controls">
                         <button type="button" className="link-button" onClick={() => handleRemoveExtra(extra)}>
+                          Remove
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {!minimized && (
+        <div className="reschedule-section">
+          <div className="reschedule-header">
+            <button
+              type="button"
+              className="link-button reschedule-toggle"
+              onClick={() => setShowActivities((v) => !v)}
+              aria-expanded={showActivities}
+            >
+              Manage activities
+              <IconChevronDown size={13} className={showActivities ? 'is-flipped' : undefined} />
+            </button>
+
+            <div className="reschedule-info-wrap" ref={activitiesInfoRef}>
+              <button
+                type="button"
+                className="info-btn"
+                onClick={() => setShowActivitiesInfo((v) => !v)}
+                aria-expanded={showActivitiesInfo}
+                aria-label="What are activities?"
+              >
+                <IconInfo size={18} />
+                <span>Info</span>
+              </button>
+              {showActivitiesInfo && (
+                <div className="info-popover" role="tooltip">
+                  Block out personal time — library, prayer, a coffee break, or something of
+                  your own — so it shows on your timetable and reminds you like a class.
+                  Removed automatically if a real class ends up in that slot.
+                </div>
+              )}
+            </div>
+          </div>
+
+          {showActivities && (
+            <div className="reschedule-panel">
+              {activityError && (
+                <p className="reschedule-error" role="alert">
+                  {activityError}
+                </p>
+              )}
+              <div className="reschedule-edit-panel">
+                <select
+                  className="reschedule-select"
+                  value={isCustomActivity ? '__custom__' : activityType}
+                  onChange={(e) => {
+                    if (e.target.value === '__custom__') {
+                      setIsCustomActivity(true);
+                    } else {
+                      setIsCustomActivity(false);
+                      setActivityType(e.target.value);
+                    }
+                  }}
+                  aria-label="Activity type"
+                >
+                  {ACTIVITY_TYPES.map((t) => (
+                    <option key={t} value={t}>
+                      {t}
+                    </option>
+                  ))}
+                  <option value="__custom__">Custom…</option>
+                </select>
+                {isCustomActivity && (
+                  <input
+                    type="text"
+                    className="reschedule-select"
+                    placeholder="Custom activity name"
+                    value={customActivityName}
+                    onChange={(e) => setCustomActivityName(e.target.value)}
+                    aria-label="Custom activity name"
+                  />
+                )}
+                <div className="reschedule-field-row">
+                  <select
+                    className="reschedule-select"
+                    value={activityDay}
+                    onChange={(e) => setActivityDay(e.target.value)}
+                    aria-label="Day for the activity"
+                  >
+                    {DAY_ORDER.map((d) => (
+                      <option key={d} value={d}>
+                        {d}
+                      </option>
+                    ))}
+                  </select>
+                  <select
+                    className="reschedule-select"
+                    value={effectiveActivitySlot}
+                    onChange={(e) => setActivitySlot(e.target.value)}
+                    aria-label="Time slot for the activity"
+                  >
+                    {timeSlots.map((s, i) => (
+                      <option key={s} value={s}>
+                        {`Slot ${i + 1} · ${formatSlot(s).start}`}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="reschedule-edit-actions">
+                  <button type="button" className="action-btn-blue" onClick={handleAddActivity}>
+                    Add
+                  </button>
+                  {activities.length > 0 && (
+                    <button
+                      type="button"
+                      className="action-btn-blue"
+                      onClick={() => setShowActivityList((v) => !v)}
+                    >
+                      {showActivityList ? 'Hide Activities' : `Show Activities (${activities.length})`}
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {showActivityList && sortedActivities.length > 0 && (
+                <div className="reschedule-list">
+                  {sortedActivities.map((activity) => (
+                    <div key={`${activity.type}|${activity.day}|${activity.time}`} className="reschedule-row">
+                      <div className="reschedule-info">
+                        <span className="reschedule-course">{activity.type}</span>
+                        <span className="reschedule-official">
+                          Slot {timeSlots.indexOf(activity.time) + 1} · {activity.day}, {formatSlot(activity.time).start}
+                        </span>
+                      </div>
+                      <div className="reschedule-controls">
+                        <button type="button" className="link-button" onClick={() => handleRemoveActivity(activity)}>
                           Remove
                         </button>
                       </div>
