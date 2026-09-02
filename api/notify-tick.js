@@ -63,6 +63,22 @@ export default async function handler(req, res) {
 
       const { notifications, nextState } = result;
 
+      // TEMPORARY DEBUG (requested 2026-09-02) — confirms the whole
+      // cron -> server -> push -> device pipeline is alive on every tick,
+      // independent of whether a real class notification would otherwise
+      // fire. Remove this block once push has been confirmed working
+      // reliably on a real device: with a 1-5 minute cron schedule, leaving
+      // it on means a notification every single tick, forever.
+      notifications.push({
+        title: 'Notification Working',
+        body: `Tick at ${now.toLocaleTimeString('en-US', {
+          timeZone: 'Asia/Karachi',
+          hour: 'numeric',
+          minute: 'numeric',
+        })} (Karachi time)`,
+        tag: 'debug-heartbeat',
+      });
+
       for (const notification of notifications) {
         try {
           await webpush.sendNotification(subscriber.subscription, JSON.stringify(notification));
