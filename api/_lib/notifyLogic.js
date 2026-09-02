@@ -11,6 +11,28 @@
 
 import { abbreviateCourse, buildSchedule, cleanRoom, sessionKey } from '../../src/utils/schedule.js';
 
+// This runs on Vercel's servers (triggered by an external cron), not the
+// student's own device — so unlike the client hook (which reads the
+// browser's local clock and is naturally correct for whoever's using it),
+// `now` here must be explicitly converted to Karachi time. Vercel's
+// serverless functions run in UTC (5 hours behind Karachi), so reading
+// `now.getHours()`/`now.toLocaleDateString()` directly would silently
+// compute every check against the wrong time of day, all day, every day.
+// Pakistan doesn't observe DST, so this fixed +5h offset never needs
+// seasonal adjustment.
+const KARACHI_TZ = 'Asia/Karachi';
+const karachiParts = (date) => {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: KARACHI_TZ,
+    weekday: 'long',
+    hour: 'numeric',
+    minute: 'numeric',
+    hourCycle: 'h23',
+  }).formatToParts(date);
+  const map = Object.fromEntries(parts.map((p) => [p.type, p.value]));
+  return { weekday: map.weekday, hours: Number(map.hour), minutes: Number(map.minute) };
+};
+
 const REMINDER_CHECKPOINTS = [30, 10, 5];
 
 const formatCountdown = (mins) => {
@@ -57,12 +79,12 @@ const freshState = (today) => ({
  * checkpoints in one burst.
  */
 export const computeNotifications = (data, subscriberSelection, prevState, now) => {
-  const today = now.toLocaleDateString('en-US', { weekday: 'long' });
+  const { weekday: today, hours, minutes } = karachiParts(now);
   const state = prevState && prevState.lastDay === today ? { ...prevState } : freshState(today);
 
   const { selectedClasses = [], overrides = [], extraClasses = [], activities = [] } = subscriberSelection;
   const { processedSchedule } = buildSchedule(data, selectedClasses, overrides, extraClasses, activities);
-  const nowMinutes = now.getHours() * 60 + now.getMinutes();
+  const nowMinutes = hours * 60 + minutes;
   const sessions = (processedSchedule[today] || []).filter((cell) => !cell.isEmpty);
   const currentCell = sessions.find((cell) => nowMinutes >= cell.startMin && nowMinutes < cell.endMin);
   const nextCell = sessions.find((cell) => cell.startMin > nowMinutes);
