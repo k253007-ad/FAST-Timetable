@@ -17,6 +17,16 @@ import { computeNotifications } from './_lib/notifyLogic.js';
 
 const vapidReady = () => Boolean(process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY);
 
+// High urgency + an explicit TTL both matter for delivery to a phone in
+// deep sleep / battery-optimization mode — without them, some push
+// services (and by extension the OS on the receiving end) may delay or
+// even drop a message that arrives while the device is idle, since a
+// default/"normal" urgency push is exactly the kind of traffic aggressive
+// battery managers deprioritize. TTL is in seconds; 30 minutes is generous
+// for a class-schedule reminder — there's no point delivering one hours
+// late once the push service finally gets a chance to retry.
+const PUSH_OPTIONS = { TTL: 60 * 30, urgency: 'high' };
+
 export default async function handler(req, res) {
   const secret = req.query?.secret || req.headers.authorization?.replace(/^Bearer\s+/i, '');
   if (!process.env.CRON_SECRET || secret !== process.env.CRON_SECRET) {
@@ -81,7 +91,7 @@ export default async function handler(req, res) {
 
       for (const notification of notifications) {
         try {
-          await webpush.sendNotification(subscriber.subscription, JSON.stringify(notification));
+          await webpush.sendNotification(subscriber.subscription, JSON.stringify(notification), PUSH_OPTIONS);
           sent++;
         } catch (err) {
           if (err.statusCode === 404 || err.statusCode === 410) {
@@ -89,7 +99,19 @@ export default async function handler(req, res) {
             removed++;
             return; // subscription is gone, no point saving state for it
           }
-          console.error(`notify-tick: push failed for ${subscriber.id}`, err.message);
+          // A 401/403 usually means the VAPID key used to SEND doesn't
+          // match the one used to SUBSCRIBE (e.g. keys were rotated without
+          // redeploying, or .env.local's dev keys differ from Vercel's
+          // production ones) — deliberately NOT deleting on this, since a
+          // server-side key misconfig would otherwise wipe out every
+          // subscriber at once on the next tick. Logged with full detail
+          // (status + body) instead of just a bare message, since "errors:
+          // N" in the response alone isn't enough to diagnose which of the
+          // many possible causes this is.
+          console.error(
+            `notify-tick: push failed for ${subscriber.id} (status ${err.statusCode ?? 'unknown'}):`,
+            err.body || err.message
+          );
           errors++;
         }
       }

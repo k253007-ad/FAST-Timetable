@@ -4,10 +4,11 @@
 // (fine for a long-lived browser tab) while this runs once per stateless
 // cron invocation and must persist the exact same bookkeeping in the
 // subscriber's own stored `notifiedState` between ticks instead. Keep the
-// checkpoint semantics (30/10/5 min, "now started", "ended, next up") in
-// sync with the client hook by hand if either ever changes — they're
-// meant to feel identical to a student, just delivered through two
-// different pipes (local timer vs. push).
+// checkpoint semantics (15/5 min before the current class ends, 30/10/5 min
+// before the next one starts, "now started", "ended, next up") in sync with
+// the client hook by hand if either ever changes — they're meant to feel
+// identical to a student, just delivered through two different pipes
+// (local timer vs. push).
 
 import { abbreviateCourse, buildSchedule, cleanRoom, sessionKey } from '../../src/utils/schedule.js';
 
@@ -33,7 +34,12 @@ const karachiParts = (date) => {
   return { weekday: map.weekday, hours: Number(map.hour), minutes: Number(map.minute) };
 };
 
-const REMINDER_CHECKPOINTS = [30, 10, 5];
+// Different checkpoints for the two directions, per 2026-09-02 request:
+// reminders about the CURRENT class ending use 15/5 min; reminders about
+// the NEXT class starting use 30/10/5 min. Kept as two separate constants
+// (not one shared array) specifically so they can diverge like this.
+const ENDING_SOON_CHECKPOINTS = [15, 5];
+const STARTING_SOON_CHECKPOINTS = [30, 10, 5];
 
 const formatCountdown = (mins) => {
   if (mins <= 0) return 'now';
@@ -120,12 +126,12 @@ export const computeNotifications = (data, subscriberSelection, prevState, now) 
     state.notifiedNowKey = currentInfo.key;
   }
 
-  // 30/10/5 minutes left in the class happening right now.
+  // 15/5 minutes left in the class happening right now.
   if (currentInfo) {
     const prevDiff = state.endingSoonDiff[currentInfo.key];
     state.endingSoonDiff[currentInfo.key] = currentInfo.minutesLeft;
     if (prevDiff !== undefined) {
-      const crossed = REMINDER_CHECKPOINTS.find((t) => prevDiff > t && currentInfo.minutesLeft <= t);
+      const crossed = ENDING_SOON_CHECKPOINTS.find((t) => prevDiff > t && currentInfo.minutesLeft <= t);
       if (crossed) {
         notifications.push({
           title: `${currentInfo.abbr} ends in ${formatCountdown(currentInfo.minutesLeft)}`,
@@ -156,7 +162,7 @@ export const computeNotifications = (data, subscriberSelection, prevState, now) 
     const prevDiff = state.startingSoonDiff[nextInfo.key];
     state.startingSoonDiff[nextInfo.key] = nextInfo.minutesLeft;
     if (prevDiff !== undefined) {
-      const crossed = REMINDER_CHECKPOINTS.find((t) => prevDiff > t && nextInfo.minutesLeft <= t);
+      const crossed = STARTING_SOON_CHECKPOINTS.find((t) => prevDiff > t && nextInfo.minutesLeft <= t);
       if (crossed) {
         notifications.push({
           title: `${nextInfo.abbr} starts at ${nextInfo.startLabel}`,
