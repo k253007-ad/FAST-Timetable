@@ -27,6 +27,57 @@ const notifyClients = async (message) => {
   return clients;
 };
 
+// Public VAPID key — NOT secret, it ships in every page load anyway (see
+// import.meta.env.VITE_VAPID_PUBLIC_KEY in src/utils/notifications.js).
+// Duplicated here because public/ is copied verbatim by Vite with no
+// env-var substitution, so a service worker script has no other way to see
+// it. If the VAPID key pair is ever rotated, this MUST be updated to match
+// — otherwise the resubscribe below (pushsubscriptionchange) will silently
+// fail forever on every device that needs it.
+const VAPID_PUBLIC_KEY = 'BFYCjHPcxx2j7f68cSLrMKPuozxyeZEell3hZMA4rTk6rfIJgxiueirlaKvw4S3GSNuVyl-l-r89JlME7iZqAzg';
+
+const urlBase64ToUint8Array = (base64String) => {
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const rawData = atob(base64);
+  return Uint8Array.from([...rawData].map((c) => c.charCodeAt(0)));
+};
+
+// Browsers occasionally invalidate/rotate a device's push subscription on
+// their own (Chrome does this periodically for security) — entirely
+// outside the app's control, and it can happen at any time, including
+// while the app is fully closed, which is exactly when a silent failure
+// here would be worst (the device would just go dark until someone
+// happened to reopen the app). Re-subscribes immediately and tells the
+// server to migrate the old schedule over to the new endpoint (see
+// api/subscribe.js's oldEndpoint handling), all without needing any page
+// open at all.
+self.addEventListener('pushsubscriptionchange', (event) => {
+  event.waitUntil(
+    (async () => {
+      const oldEndpoint = event.oldSubscription?.endpoint;
+      try {
+        const newSubscription =
+          event.newSubscription ||
+          (await self.registration.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
+          }));
+        await fetch('/api/subscribe', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ subscription: newSubscription, oldEndpoint }),
+        });
+      } catch (err) {
+        // Nothing more can be done from here — no page is necessarily open
+        // to retry from. The device stops receiving pushes until the app
+        // is reopened and its own subscribe flow runs again.
+        console.error('pushsubscriptionchange: resubscribe failed', err);
+      }
+    })()
+  );
+});
+
 // Best-effort — tells the server to stop reminding about this session too,
 // so a push notification's "End Class" tap works identically whether or not
 // any tab/app is open. Failures are swallowed: the in-app suppression (via
@@ -90,6 +141,12 @@ self.addEventListener('push', (event) => {
       tag,
       data,
       actions,
+      // Several distinct checkpoints share a tag (e.g. the 15-min and 5-min
+      // "ending soon" reminders both use 'ending-soon') — without renotify,
+      // the second one would silently replace the first on screen with no
+      // re-alert (no sound/vibration), meaning a student who already
+      // glanced at and dismissed the first could miss the second entirely.
+      renotify: true,
       icon: '/icons/icon-192.png',
       badge: '/icons/badge-72.png',
     })

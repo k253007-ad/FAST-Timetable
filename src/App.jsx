@@ -542,22 +542,42 @@ function App() {
                     type="button"
                     role="menuitem"
                     className="menu-item"
-                    onClick={() => {
-                      if (notif.permission !== 'granted') notif.requestPermission();
+                    onClick={async () => {
+                      if (notif.permission === 'granted') {
+                        await notif.setNotificationsEnabled(!notif.userEnabled);
+                      } else {
+                        await notif.requestPermission();
+                      }
                       setSettingsOpen(false);
                     }}
-                    disabled={notif.permission === 'unsupported' || notif.permission === 'granted'}
+                    disabled={notif.permission === 'unsupported' || notif.permission === 'denied'}
                   >
-                    {notif.permission === 'granted' ? <IconBell size={16} /> : <IconBellOff size={16} />}
+                    {notif.permission === 'granted' && notif.userEnabled ? (
+                      <IconBell size={16} />
+                    ) : (
+                      <IconBellOff size={16} />
+                    )}
                     <span>
                       {notif.permission === 'granted'
-                        ? 'Notifications on'
+                        ? notif.userEnabled
+                          ? 'Notifications on'
+                          : 'Notifications off'
                         : notif.permission === 'denied'
                           ? 'Notifications blocked'
                           : notif.permission === 'unsupported'
                             ? 'Notifications unsupported'
                             : 'Enable notifications'}
-                      <small>Based on your Main timetable</small>
+                      <small>
+                        {notif.permission === 'granted'
+                          ? notif.userEnabled
+                            ? notif.pushStatus?.state === 'subscribed'
+                              ? 'Push: connected — works even fully closed'
+                              : notif.pushStatus?.state === 'error'
+                                ? `Push error (${notif.pushStatus.detail}) — only works while open`
+                                : 'Connecting to push...'
+                            : 'Tap to turn back on'
+                          : 'Based on your Main timetable'}
+                      </small>
                     </span>
                   </button>
 

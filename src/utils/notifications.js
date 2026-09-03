@@ -68,13 +68,26 @@ export const syncPushSubscription = async (subscription, schedule) => {
  * closed — see api/notify-tick.js) and registers it with the server,
  * reusing an existing browser-level subscription if one's already there
  * instead of creating a duplicate.
+ *
+ * Throws a specific Error for each distinct failure point (unsupported
+ * browser, the VITE_VAPID_PUBLIC_KEY env var missing from THIS build,
+ * no service worker registration yet, the browser's own subscribe() call
+ * rejecting, or the server rejecting /api/subscribe) instead of silently
+ * returning null — a silent null made a real Vercel env-var misconfig
+ * (the actual cause found 2026-09-02: notifications only worked while the
+ * app was open, because no real subscription — nor sync — had ever
+ * succeeded, so only the local-timer fallback was ever doing anything)
+ * indistinguishable from a dozen other causes. Callers surface `err.message`
+ * to the user instead of guessing.
  */
 export const subscribeToPush = async (schedule) => {
+  if (!isPushSupported()) throw new Error('unsupported');
+
   const publicKey = import.meta.env.VITE_VAPID_PUBLIC_KEY;
-  if (!isPushSupported() || !publicKey) return null;
+  if (!publicKey) throw new Error('missing-vapid-key');
 
   const reg = await navigator.serviceWorker.getRegistration();
-  if (!reg) return null;
+  if (!reg) throw new Error('no-service-worker');
 
   let subscription = await reg.pushManager.getSubscription();
   if (!subscription) {
@@ -84,13 +97,38 @@ export const subscribeToPush = async (schedule) => {
         applicationServerKey: urlBase64ToUint8Array(publicKey),
       });
     } catch (err) {
-      console.error('Push subscribe failed:', err);
-      return null;
+      throw new Error(`browser-subscribe-failed: ${err.message}`);
     }
   }
 
-  await syncPushSubscription(subscription, schedule);
+  const synced = await syncPushSubscription(subscription, schedule);
+  if (!synced) throw new Error('server-sync-failed');
+
   return subscription;
+};
+
+/**
+ * Client-side counterpart to public/sw.js's markEndedOnServer — used when
+ * the in-app "Class ended" button is clicked (not the push notification's
+ * own action button, which the SW already handles itself). Best-effort:
+ * failures are swallowed since the in-app suppression already took effect
+ * regardless, and the next real server tick self-corrects once the class's
+ * actual end time passes anyway.
+ */
+export const markSessionEndedOnServer = async (key) => {
+  if (!key || !isPushSupported()) return;
+  try {
+    const reg = await navigator.serviceWorker.getRegistration();
+    const subscription = await reg?.pushManager.getSubscription();
+    if (!subscription) return;
+    await fetch('/api/mark-ended', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ endpoint: subscription.endpoint, key }),
+    });
+  } catch {
+    // best-effort only
+  }
 };
 
 export const unsubscribeFromPush = async () => {

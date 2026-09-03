@@ -338,17 +338,221 @@ sheet — see above.
   profile tab is currently open in ClassSelector. Don't "simplify" this to read the `selectedClasses`
   prop/state instead; that would make notifications follow whatever profile you're browsing.
 - **`public/sw.js` must stay cache-free** — no `caches.open`/fetch-intercepting logic. It
-  exists only for notification action buttons (`registration.showNotification`) and PWA
-  installability. Adding an offline cache here reintroduces exactly the stale-content risk
-  flagged in the 2026-08-19 PWA discussion (service workers silently serving old code to
-  installed devices) — if that's ever wanted, it needs deliberate cache-versioning design,
-  not an incidental addition.
+  exists for notification action buttons (`registration.showNotification`), PWA
+  installability, and (as of 2026-09-02) receiving real Web Push messages (`push` event) —
+  none of that requires caching anything. Adding an offline cache here reintroduces exactly
+  the stale-content risk flagged in the 2026-08-19 PWA discussion (service workers silently
+  serving old code to installed devices) — if that's ever wanted, it needs deliberate
+  cache-versioning design, not an incidental addition.
+- **`api/_lib/notifyLogic.js` and `src/hooks/useClassNotifications.js` must be kept in sync by
+  hand** — see "Push notifications" above. They're intentionally separate implementations
+  (one stateless per cron tick, one stateful via refs in a long-lived tab) of what must stay
+  identical checkpoint behavior; there's no shared import between them.
+
+### Push notifications (added 2026-09-02) — fires with the app fully closed
+
+Supersedes the "no backend" limitation described in "Class notifications + PWA" below (that
+section's local-timer mechanism is unchanged and still runs whenever the app IS open/
+backgrounded — this is an addition, not a replacement of it). User asked to make
+notifications appear when the app is closed; that's only possible with real Web Push, which
+needs a server, a place to store each device's subscription + selected schedule, and a
+recurring job that checks every subscriber's schedule and sends pushes. Built to stay on
+free hosting throughout — see the free-tier reasoning below.
+
+- **`src/services/timetableSource.js`** (new) — the actual sheet-fetch-and-parse logic
+  (`buildTimetableFromMeta`, `parseCellValue`, `fetchSheet`, `fetchRollNumbers`, etc.) was
+  extracted out of `dataService.js` into this environment-agnostic module, because the
+  server-side cron function can't call `dataService.js`'s original `fetch('/api/data')` (a
+  relative URL has no implicit origin in Node). `dataService.js` is now just: fetch `/api/data`
+  for metadata, then call `buildTimetableFromMeta(metaJson)` — same public API, same behavior,
+  verified via lint/build (no logic changed, just moved). The server calls
+  `buildTimetableFromMeta(await getSheetData())` directly, in-process, no HTTP round trip.
+- **VAPID keys** (Web Push's auth mechanism) generated once via
+  `node -e "console.log(JSON.stringify(require('web-push').generateVAPIDKeys()))"` and stored
+  as env vars (`VITE_VAPID_PUBLIC_KEY`/`VAPID_PUBLIC_KEY` — same value, one for the client
+  bundle one for the server — and `VAPID_PRIVATE_KEY`, server-only). See `.env.example` for
+  every var this feature needs and what each does; **`.env.local` holds real generated dev
+  keys already** (gitignored) so `npm run dev` works out of the box for anyone continuing this
+  work locally — the user needs their own values in the Vercel dashboard for production (they
+  can reuse the same keys, or generate fresh ones; either is fine, they're not tied to any
+  account).
+- **Storage** (`api/_lib/subscriptionStore.js`): one record per subscribed device,
+  `{ subscription, selectedClasses, overrides, extraClasses, activities, notifiedState }` —
+  everything `computeNotifications` needs to check a subscriber without touching the browser
+  at all. Keyed by a sha256 hash of the push subscription's own `endpoint` (stable per
+  device+browser install, no login/user-id system exists in this app). Backed by **Vercel KV**
+  (Upstash Redis under the hood) via plain `fetch` calls to its REST API — no SDK dependency —
+  with an **in-memory `Map` fallback** when `KV_REST_API_URL`/`KV_REST_API_TOKEN` aren't set.
+  The fallback is fine for local dev (confirmed working end-to-end against it) but **actively
+  wrong for production**: a serverless cold start resets it, silently losing every subscriber.
+  The user must create a KV store in the Vercel dashboard and link it to this project before
+  deploying this feature — see the to-do this session added to the workspace-root `CLAUDE.md`.
+- **`api/_lib/notifyLogic.js`**: a stateless, from-scratch reimplementation of
+  `useClassNotifications.js`'s tick logic (`computeNotifications(data, subscriberSelection,
+  prevState, now)`) — deliberately a separate copy, not a shared import, because the client
+  hook keeps its dedup bookkeeping in React refs (fine for a long-lived tab) while this runs
+  once per **stateless** cron invocation and must persist the identical bookkeeping in the
+  subscriber's own stored `notifiedState` between ticks instead. Same checkpoint semantics
+  (30/10/5 min, "now started", "ended → next up") — **keep both in sync by hand if either ever
+  changes**, they're meant to feel identical to a student regardless of which pipe delivered
+  the notification. A push notification's "End Class" action sets `notifiedState.manualEndedKey`
+  (via `api/mark-ended.js`) — same "suppress this session immediately" behavior as the client's
+  `manualEndedKeyRef`, clearing itself once the real session changes.
+  **Verified directly** (not just read for correctness): a small script fed it real timetable
+  data plus a synthetic controlled `now`, confirming — in order — a "Now:" notification fires
+  once or the first tick, doesn't repeat on an unchanged tick, an ending-soon checkpoint fires
+  correctly on crossing 10 minutes left (showing the *actual* remaining minutes, not the
+  checkpoint threshold — same as the client hook), `manualEndedKey` correctly suppresses
+  further notifications for that exact session, and correctly clears once the real session's
+  end time passes.
+- **`api/subscribe.js`** (POST): the client's `subscribeToPush()` calls this after
+  `pushManager.subscribe()` succeeds, storing the subscription + current Main-profile
+  schedule; also handles unsubscription (`{ subscription, unsubscribe: true }`).
+- **`api/notify-tick.js`**: the one endpoint an external scheduler hits every 1-5 minutes.
+  Loads the live timetable once, then for every stored subscriber: runs
+  `computeNotifications`, sends anything it returns via `web-push`'s `sendNotification`, and
+  saves the updated `notifiedState` back. A subscription the push service reports as gone
+  (HTTP 404/410 — uninstalled, browser data cleared, etc.) is deleted rather than retried
+  forever. Protected by a shared-secret check (`CRON_SECRET`, as `?secret=` or a Bearer
+  header) so a random request can't trigger pushes or run up function-invocation counts.
+  **Verified end-to-end against the real dev server**: subscribed a well-formed (real EC
+  key pair, real endpoint host) test subscription with a "Library" activity scheduled for
+  the real current day+time-slot, called `/api/notify-tick`, and confirmed the server
+  actually attempted a push send to Google's real FCM endpoint (which correctly reported the
+  fake registration as gone, and the code correctly deleted it) — this proves the schedule-
+  matching → computeNotifications → web-push-send → cleanup pipeline all actually run
+  correctly against live infrastructure, not just that the code compiles.
+- **`api/mark-ended.js`** (POST `{ endpoint, key }`): looks up the subscriber by their push
+  endpoint and sets `notifiedState.manualEndedKey = key`. Called from `public/sw.js`'s
+  `notificationclick` handler's existing "ended" action — works with zero pages open, since
+  it reads its own subscription via `self.registration.pushManager.getSubscription()` rather
+  than needing any app state. Best-effort (network errors are swallowed) since the in-app
+  suppression path already covers the common "app is open" case, and the next real tick
+  self-corrects once the class's actual end time passes regardless.
+- **`public/sw.js`**: gained a `push` event listener — `self.registration.showNotification()`
+  with whatever `{title, body, tag, data, actions}` the server sent (browsers wake the service
+  worker for an incoming push even with the app fully closed, which is the entire point).
+  **Still deliberately cache-free** (see the hard constraint below) — this only adds message
+  handling, no fetch interception.
+- **Client wiring** (`src/hooks/useClassNotifications.js`, `src/utils/notifications.js`):
+  `subscribeToPush(schedule)` (new, `notifications.js`) converts the VAPID public key to the
+  `Uint8Array` `PushManager.subscribe()` needs, subscribes (reusing an existing browser-level
+  subscription if one's already there), and POSTs it to `/api/subscribe`.
+  `useClassNotifications`'s `requestPermission()` now also calls this once permission is
+  granted; a mount-time effect re-subscribes a returning user whose OS permission was already
+  granted (covers both "browser install predates this feature" and "push subscription was
+  lost without revoking the permission"); and the existing 20s tick loop **also** re-syncs the
+  stored schedule to the server whenever the Main profile's selection/overrides/extras/
+  activities actually change (cheap JSON-string comparison against the last-synced payload,
+  so this doesn't POST every 20 seconds forever — only on a real change) — this is what keeps
+  `api/notify-tick.js` checking against what's actually selected right now, not whatever was
+  selected when push was first turned on. No UI change needed beyond this — the existing
+  Settings-menu "Enable notifications" button already triggers `requestPermission()`.
+- **Why an external scheduler, not Vercel's own Cron**: Vercel's Hobby (free) tier limits Cron
+  Jobs to once/day — nowhere near frequent enough for a "starts in 5 minutes" reminder to be
+  useful. Vercel Pro (~$20/month) removes that limit, but the user explicitly chose to stay
+  free. Workaround: a free external scheduler (cron-job.org, or a GitHub Actions workflow with
+  a `schedule:` cron trigger) just hits `https://<deployed-domain>/api/notify-tick?secret=
+  <CRON_SECRET>` on a 1-5 minute interval directly — Vercel serverless functions can be invoked
+  by anything that can make an HTTP request, regardless of who's doing the scheduling, so this
+  fully sidesteps Vercel's own Cron pricing tier.
+- **Checkpoints diverged 2026-09-02**: current-class-ending reminders now fire at **15 and 5
+  minutes** left (was 30/10/5, shared with the starting-soon list); next-class-starting
+  reminders stay at **30/10/5 minutes**. Two separate constants
+  (`ENDING_SOON_CHECKPOINTS`/`STARTING_SOON_CHECKPOINTS`) in both `api/_lib/notifyLogic.js` and
+  `src/hooks/useClassNotifications.js` — kept in sync by hand, same as everything else about
+  these two files. **Operational note**: with only a 10-minute gap between the two
+  ending-soon checkpoints, the external cron interval needs to be short enough to land inside
+  that gap at least once — a 5-minute interval risks a single tick's time jump skipping past
+  both checkpoints in one step (the edge-triggered "crossed" detection only reports the first
+  checkpoint a jump passes through, per tick). **Use a 1-2 minute cron interval, not 5.**
+- **Subscription-rotation resilience (2026-09-02)**: browsers (Chrome especially) occasionally
+  invalidate/rotate a device's push subscription entirely on their own, for security — this
+  can happen at any time, including while the app is fully closed. Without handling this, a
+  device would silently stop receiving anything until someone happened to reopen the app.
+  `public/sw.js` now listens for `pushsubscriptionchange` and re-subscribes immediately
+  (using `event.newSubscription` if the browser provides it, else calling
+  `pushManager.subscribe()` again with a **VAPID public key hardcoded directly in sw.js** —
+  duplicated from `.env`'s `VITE_VAPID_PUBLIC_KEY` because `public/` is copied verbatim by
+  Vite with no env-var substitution, so a service worker has no other way to see it; **if VAPID
+  keys are ever rotated, this hardcoded copy in `public/sw.js` must be updated too, or
+  resubscription will silently fail forever**). `api/subscribe.js` gained an `oldEndpoint`
+  field specifically for this: when present, it carries the old record's schedule +
+  `notifiedState` over to the new subscription's record and deletes the stale one — necessary
+  because a service worker has no access to the page's `localStorage` to resend the actual
+  schedule itself. Verified directly: subscribed A with a real schedule, called subscribe
+  again with a different subscription B + `oldEndpoint: A`, confirmed via `notify-tick`'s
+  subscriber count that A and B correctly consolidated into one record, not two.
+- **Delivery reliability (2026-09-02)**: `api/notify-tick.js` now sends every push with
+  `{ TTL: 1800, urgency: 'high' }` — `urgency: 'high'` matters specifically for a phone in
+  battery-optimization/Doze mode, where a default/"normal"-urgency push is exactly the kind of
+  traffic aggressive OEM battery managers (MIUI, Samsung, etc.) deprioritize or delay; `TTL`
+  (30 min) caps how long a push service will keep retrying if the device is briefly
+  unreachable, so a reminder never arrives absurdly late. Error handling now distinguishes a
+  dead subscription (404/410 → delete, unchanged) from everything else (401/403/5xx → logged
+  with full status + body instead of a bare message, and deliberately **not** auto-deleted,
+  since a 401/403 usually means a server-side VAPID key mismatch — e.g. keys rotated without
+  redeploying — which would affect every subscriber at once, and auto-deleting on that basis
+  would wipe out the whole subscriber list over a config problem rather than surfacing it).
+- **`public/sw.js`'s push handler now sets `renotify: true`**: several distinct checkpoints
+  share a notification `tag` (e.g. both the 15-min and 5-min "ending soon" reminders use
+  `'ending-soon'`) — without `renotify`, the second would have silently replaced the first on
+  screen with no re-alert (no sound/vibration), so a student who'd already glanced at and
+  dismissed the first could miss the second entirely. Local (non-push) notifications already
+  had this via `showAppNotification`'s hardcoded `renotify: true`; push was missing it.
+- **Non-code factors that can still block delivery on a real device — not fixable from here,
+  worth checking directly**: (1) Android battery optimization / manufacturer battery managers
+  (MIUI, Samsung, OnePlus, etc.) can prevent Chrome or an installed PWA from waking up for a
+  push at all unless the user explicitly allows it to run unrestricted in the background —
+  check the phone's own battery/app settings for the browser or the installed PWA. (2) Desktop
+  Chrome's "Continue running background apps when Google Chrome is closed" setting (in
+  Chrome's own Settings → System) needs to stay on, or fully quitting Chrome stops delivery
+  until it's reopened. (3) **Push is unsupported in Incognito/Private browsing by design** —
+  confirmed via a real browser console warning during this session's testing
+  (`Chrome currently does not support the Push API in incognito mode`) — there is no
+  workaround, this is intentional on Chrome's part. (4) After any deploy that touches
+  `public/sw.js`, a device needs to actually open the app at least once for the browser to
+  fetch and activate the new service worker version — `skipWaiting()`/`clients.claim()` (both
+  already present) minimize this to "one visit", but a device that's never reopened since a
+  relevant deploy is still running the old SW code.
+- **What only the user can do** (per the workspace-root "uploads/deploys are always manual"
+  rule — Claude never provisions cloud infra or deploys on their behalf): (1) create a Vercel
+  KV store in the project's Vercel dashboard and link it (this auto-populates
+  `KV_REST_API_URL`/`KV_REST_API_TOKEN`); (2) add every var from `.env.example` to the Vercel
+  project's Environment Variables (VAPID keys can be reused from `.env.local` or regenerated —
+  either is fine); (3) sign up for a free external scheduler (cron-job.org is simplest — no
+  code needed, just paste the URL and interval) or add a GitHub Actions cron workflow, pointed
+  at `/api/notify-tick?secret=...` on their deployed domain, every 1-5 minutes; (4) deploy —
+  see the workspace-root to-do for the current file list.
+- **Not yet done, flagged rather than silently skipped**: real device-level push delivery
+  (does a notification actually pop up on a phone/desktop with the tab closed) has **not** been
+  confirmed on real hardware — this sandbox's automated browser instances (both Playwright's
+  bundled Chromium and the real system Edge binary, tried both) can't complete real FCM push
+  registration (`AbortError: Registration failed - permission denied` even with the
+  Notifications permission granted and full network access to `fcm.googleapis.com` confirmed
+  working) — a known limitation of automated/headless browser environments, not a defect in
+  this implementation. Everything short of that final device-delivery hop (schedule matching,
+  notification-generation logic including all edge cases, the actual outbound web-push send
+  attempt reaching Google's real infrastructure, and gone-subscription cleanup) has been
+  verified against real, live data. Worth a real-phone/desktop check once deployed, the same
+  way the 2026-08-25 iOS PWA notification path was flagged as unconfirmed for lack of a device.
 
 ### Class notifications + PWA (added 2026-08-25)
 
-No backend — see the workspace-root `CLAUDE.md` session log for why (real push that fires
-with the app fully closed needs a server + database to store every user's subscription and
-selected classes, plus a scheduled job; out of scope). Instead:
+Local-only notifications — fire while the app is open or backgrounded (tab/PWA process
+alive), **not** when it's fully closed; see "Push notifications" above for the 2026-09-02
+addition that covers the fully-closed case too.
+
+**As of 2026-09-02, this is a FALLBACK, not a second always-on channel.** Once a device
+successfully subscribes to push, `useClassNotifications`'s own local-timer firing is disabled
+on that device (`pushActiveRef` in the hook) — push already covers the "app is open" case
+too, since a push message reaches the service worker regardless of whether a tab is open.
+Firing both unconditionally caused every notification to show up twice while the app was
+open (found and fixed the same day a real user reported exactly this after testing the
+feature). The local timer only actually fires notifications now for a device where push
+subscription failed or isn't supported at all — everything else about it (permission
+handling, the tick loop, the in-app "Class ended" button) still runs unconditionally, since
+it's also what drives push subscription itself and the Main-profile schedule sync.
 
 - `public/manifest.json` + `public/sw.js` make the site installable (Add to Home Screen /
   desktop install). `public/icons/` (192, 512, maskable-512, badge-72) generated from the
