@@ -421,6 +421,26 @@ button {
   color: inherit;
 }
 
+.alert-bar-info {
+  background: var(--accent-soft);
+  border-color: var(--accent-soft-strong);
+  color: var(--accent-ink);
+}
+
+/* A link-styled button embedded mid-sentence (see the calendar-sync notice)
+   — unlike .link-button it can't float right or sit on its own line. */
+.link-button-inline {
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  font-weight: 700;
+  color: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
 .data-disclaimer {
   display: flex;
   align-items: flex-start;
@@ -482,65 +502,13 @@ button {
 
 /* Adjust class times — manual per-device day/slot overrides */
 
-.reschedule-section {
-  margin-top: 12px;
-  border-top: 1px solid var(--border);
-  padding-top: 10px;
-}
-
-.reschedule-header {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.reschedule-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-}
-
-.reschedule-toggle svg {
-  transition: transform 0.15s ease;
-}
-
-.reschedule-toggle svg.is-flipped {
-  transform: rotate(180deg);
-}
-
-.reschedule-info-wrap {
-  display: inline-flex;
-}
-
-.info-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  height: 28px;
-  padding: 0 11px 0 9px;
-  flex-shrink: 0;
-  border: 1px solid var(--border-strong);
-  border-radius: 999px;
-  background: var(--surface-3);
-  color: var(--text-2);
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.info-btn:hover {
-  background: var(--surface-2);
-  border-color: var(--text-3);
-  color: var(--text);
-}
-
-/* Anchored to .reschedule-header (the nearest positioned ancestor, not the
-   narrow .reschedule-info-wrap the button itself sits in) and spans its full
-   width via left:0/right:0 instead of a fixed width from the button's own
-   position — a fixed width anchored to the button overflowed off the right
-   edge of the screen on mobile, since the button isn't flush with either
-   edge of the card. */
+/* Anchored to the nearest positioned ancestor (.synced-indicator is the only
+   remaining user since the 4 "My classes" sections moved to modals,
+   2026-09-07 — see .section-btn-row above) and spans its full width via
+   left:0/right:0 instead of a fixed width from the button's own position —
+   a fixed width anchored to the button overflowed off the right edge of the
+   screen on mobile, since the button isn't flush with either edge of the
+   card. */
 .info-popover {
   position: absolute;
   top: calc(100% + 6px);
@@ -586,11 +554,16 @@ button {
   padding-right: 2px;
 }
 
-/* "Add extra class" now reuses .reschedule-edit-panel (same bordered box as
-   "Adjust class times") for visual/structural parity, and its course field
-   is CourseCombobox (ClassSelector.jsx) — the same searchable combobox
-   pattern as the Course tab's own search, replacing a plain <select> whose
-   long option text could overflow a narrow phone screen. */
+/* "Add extra class" reuses .reschedule-edit-panel (same bordered box as
+   "Adjust class times") for visual/structural parity. Its course field
+   (CourseDropdown, ClassSelector.jsx) has gone through two revisions:
+   2026-09-01 made it a searchable combobox (to avoid a native <select>'s
+   long option text overflowing a narrow phone screen); 2026-09-07 (first
+   pass) reverted it to a plain <select> on request, which promptly brought
+   the exact overflow bug back; 2026-09-07 (second pass) landed on a
+   no-search dropdown — same .combobox-panel/.option-row list as the
+   original combobox (so long names still wrap correctly), just without the
+   search input, which was the part actually not wanted. */
 
 .reschedule-row {
   display: flex;
@@ -612,6 +585,17 @@ button {
   min-width: 0;
 }
 
+/* Same vertical stack as .reschedule-info, minus its flex-basis sizing —
+   .reschedule-info's `flex: 1 1 200px` only makes sense as a row child
+   inside .reschedule-row; reusing it inside .reschedule-edit-panel's
+   *column* flex (RescheduleEditScreen's official/moved summary, 2026-09-07)
+   turned that 200px into a 200px-tall empty box instead. */
+.reschedule-edit-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
 .reschedule-course {
   font-size: 13px;
   font-weight: 700;
@@ -629,10 +613,14 @@ button {
   font-weight: 600;
 }
 
+/* Edit above, Reset below, both right-aligned (2026-09-07: "reset should be
+   below edit and they should be on right") — was a horizontal row. The
+   single-button "Remove" usage (Add extra class's own list) is unaffected
+   visually by the column direction, so no separate modifier is needed. */
 .reschedule-controls {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
+  flex-direction: column;
+  align-items: flex-end;
   gap: 6px;
 }
 
@@ -745,6 +733,12 @@ input.reschedule-select {
   gap: 6px;
 }
 
+/* "Manage activities" time-slot picker (2026-09-07): first a single
+   <select>, briefly an always-visible checkbox grid, now a proper dropdown
+   (DropdownShell, ClassSelector.jsx) — same .combobox-panel/.option-row
+   list as CourseDropdown, just multi-select (stays open across checks). No
+   dedicated CSS needed any more; it's built entirely from existing classes. */
+
 .room-field-label {
   font-size: 11px;
   font-weight: 700;
@@ -753,6 +747,28 @@ input.reschedule-select {
   color: var(--text-3);
 }
 
+/* "Manage activities" time-slot checklist (2026-09-07) — a plain always-
+   visible list, not a dropdown, now that the whole panel lives inside a
+   Modal with room to grow; same .option-row/.option-checkbox visual as
+   every other checkbox list in this app. */
+.activity-slot-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* Room field option groups (Building / Room type / Block-or-Lab / Number) —
+   shared by "Adjust class times" and "Add extra class" via RoomFields, so a
+   change here automatically applies to both. Briefly tried as a vertical
+   stack of full-width rows (2026-09-07, "must me top to bottom") to match
+   the day-picker redesign, but with up to 4 groups each holding several
+   options that made the edit screen tall enough to force scrolling inside
+   the popup — reverted the same day ("I dont want to scroll down in
+   popup") back to compact wrapping pills, just keeping the improved
+   accent-tinted hover from that attempt instead of the old plain-gray one.
+   The field *groups* themselves were always their own top-to-bottom row
+   (Building, then Room type, then Block/Number or Lab) — that part never
+   changed; only the options *within* one group wrap horizontally. */
 .pill-group {
   display: flex;
   flex-wrap: wrap;
@@ -772,8 +788,9 @@ input.reschedule-select {
 }
 
 .pill-option:hover {
-  border-color: var(--text-3);
-  color: var(--text);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-ink);
 }
 
 .pill-option.is-active {
@@ -950,6 +967,189 @@ input.reschedule-select {
   cursor: not-allowed;
 }
 
+/* DropdownShell's trigger (2026-09-07) — a <button>, not an <input>, reusing
+   .combobox-input's box/border/focus styling for a no-search dropdown
+   (CourseDropdown, the activity slot picker). The label must truncate
+   rather than overflow — a long course name escaping its box on a narrow
+   phone screen is exactly the bug this replaced a native <select> to fix. */
+.combobox-trigger {
+  display: block;
+  text-align: left;
+  cursor: pointer;
+}
+
+.combobox-trigger-label {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* "My classes"' 4 section-opening buttons (Selected courses / Adjust class
+   times / Add extra class / Manage activities) — each opens a Modal (below)
+   instead of expanding inline (2026-09-07). */
+.section-btn-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 2px 0 4px;
+}
+
+.section-btn {
+  flex: 1 1 150px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  height: 44px;
+  padding: 0 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.12s ease, background-color 0.12s ease;
+}
+
+.section-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent-ink);
+  background: var(--accent-soft);
+}
+
+.section-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.section-btn-count {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-3);
+  background: var(--surface-3);
+  padding: 2px 7px;
+  border-radius: 999px;
+}
+
+/* ---------- Modal (2026-09-07) ----------
+   Each of "My classes"' 4 sections (Selected courses / Adjust class times /
+   Add extra class / Manage activities) opens its content in one of these
+   instead of expanding inline — portaled to document.body (see Modal in
+   ClassSelector.jsx), so z-index/positioning is never fought by an ancestor. */
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(15, 18, 26, 0.5);
+  animation: fade-in 0.14s ease;
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+.modal-box {
+  width: 100%;
+  max-width: 560px;
+  /* Raised from 80vh/720px (2026-09-07) — "Adjust class times"' PillOptions
+     edit panel and "Manage activities"' now-always-visible slot checklist
+     both got taller with their dropdowns/toggles removed; still scrolls its
+     own body past this if content is taller still. */
+  max-height: min(88vh, 860px);
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+  animation: pop 0.16s ease;
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.modal-header-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.modal-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+/* Wizard back button (2026-09-07) — "Adjust class times" steps through
+   Day -> Courses -> Edit as separate screens; this returns one step. Reuses
+   IconChevronDown rotated to point left rather than adding a new icon. */
+.modal-back {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  margin-left: -6px;
+  border: none;
+  border-radius: 999px;
+  background: none;
+  color: var(--text-2);
+  cursor: pointer;
+}
+
+.modal-back:hover {
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+.modal-back svg {
+  transform: rotate(90deg);
+}
+
+.modal-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+  border: none;
+  border-radius: 999px;
+  background: var(--surface-3);
+  color: var(--text-2);
+  cursor: pointer;
+}
+
+.modal-close:hover {
+  color: var(--text);
+}
+
+.modal-body {
+  padding: 16px 18px 18px;
+  overflow-y: auto;
+}
+
 /* The one icon slot for a search box, always on the right: a plain search
    icon while idle, the same icon as a tappable "submit" button once typing
    (see SearchAction in ClassSelector.jsx), or a clear (X) button once
@@ -1047,6 +1247,18 @@ input.reschedule-select {
   font: inherit;
   text-align: left;
   justify-content: space-between;
+}
+
+/* An assigned activity slot (ClassSelector.jsx, 2026-09-07) — a <div>, not
+   a <button>, since it now holds its own nested .chip-remove button; only
+   that X removes it, the row itself isn't a click target any more. */
+.option-row-static {
+  cursor: default;
+}
+
+.option-row-static:hover {
+  background: var(--accent-soft);
+  cursor: default;
 }
 
 .option-active-tag {
@@ -1153,15 +1365,8 @@ input.reschedule-select {
   transform: rotate(45deg);
 }
 
-/* Selected chips — collapsed behind a "Selected classes (N)" toggle by
-   default (added 2026-09-01), same reasoning as every other progressive-
-   disclosure toggle in this card ("many people dont want to be bombarded
-   with options"): the count-pill in the header already shows how many are
-   selected, so the full chip list is opt-in. */
-.chip-toggle-wrap {
-  margin-top: 12px;
-}
-
+/* Selected chips — shown inside the "Selected courses" modal
+   (.section-btn-row above, 2026-09-07) rather than expanding inline. */
 .chip-row {
   display: flex;
   flex-wrap: wrap;
@@ -1384,6 +1589,49 @@ input.reschedule-select {
 .day-tab.is-active {
   background: var(--accent-soft);
   border-color: var(--accent);
+  color: var(--accent-ink);
+}
+
+/* "Adjust class times"' day-picker step (2026-09-07) — top to bottom, not
+   the Today view's horizontal row; additive to .day-picker/.day-tab so the
+   Today view's own picker is untouched. Redesigned the same day from a
+   small centered pill (which read as "bad design/color" against the rest
+   of the wizard) into a full-width list row with a trailing chevron — these
+   buttons navigate to the next step, not just toggle a selection in place,
+   so the chevron signals that the way .modal-back's does the reverse. */
+.day-picker-vertical {
+  flex-direction: column;
+  gap: 8px;
+}
+
+.day-picker-vertical .day-tab {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  height: 46px;
+  padding: 0 16px;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 700;
+  text-align: left;
+}
+
+.day-picker-vertical .day-tab:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+
+.day-tab-chevron {
+  color: var(--text-3);
+  flex-shrink: 0;
+  transform: rotate(-90deg);
+}
+
+.day-picker-vertical .day-tab:hover .day-tab-chevron {
   color: var(--accent-ink);
 }
 
@@ -2008,10 +2256,12 @@ input.reschedule-select {
    this-week-only addition — never part of the real recurring schedule, so
    they're excluded from both print and exported images, same dual-exclusion
    pattern as every other new Date()-driven or session-scoped element.
-   Activities (buildActivityRows, added 2026-09-02) are personal, not part
-   of the official timetable either — same exclusion. */
-.exporting .class-box.is-extra,
-.exporting .class-box.is-activity {
+   Activities (buildActivityRows, added 2026-09-02) used to be excluded the
+   same way, but the user asked (2026-09-07) for a printed/exported
+   timetable to show activities they've added — they're a deliberate part of
+   the student's weekly routine, not a screen-only artifact like the Now/Next
+   badges this pattern otherwise exists for. */
+.exporting .class-box.is-extra {
   display: none;
 }
 
@@ -2167,8 +2417,9 @@ input.reschedule-select {
     background-color: transparent;
   }
 
-  .class-box.is-extra,
-  .class-box.is-activity {
+  /* Activities print/export now (see the matching .exporting rule above) —
+     only one-off extras stay excluded here. */
+  .class-box.is-extra {
     display: none;
   }
 

@@ -253,6 +253,25 @@ export const sessionKey = (cell) => {
 const sameClass = (a, b) =>
   a.Course === b.Course && a.Section === b.Section && a.Instructor === b.Instructor;
 
+// A raw sheet row can legitimately repeat for the identical (Course,
+// Section, Day, Time) — the same section split across two rooms/instructors
+// purely for capacity (the same phenomenon getClassOccurrences' own de-dupe
+// comment below describes). That's not a real scheduling conflict from the
+// student's perspective — it's the same class they're already in, just
+// meeting in two rooms — so collapse to one representative row per distinct
+// Course+Section before clash detection/rendering (buildSchedule below).
+// Two genuinely DIFFERENT sections of the same course at the same time (a
+// real conflict) keep their own separate entries, since Section differs.
+const dedupeByCourseSection = (items) => {
+  const seen = new Set();
+  return items.filter((item) => {
+    const key = `${item.Course}|${item.Section}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+};
+
 // Every distinct slot string across the whole timetable, in chronological
 // order — shared by buildSchedule and getClassOccurrences below, and by the
 // reschedule UI's "move to..." slot picker.
@@ -633,6 +652,8 @@ export const buildSchedule = (data, selectedClasses, overrides = [], extraClasse
           }
           if (i + colSpan > timeSlots.length) colSpan = timeSlots.length - i;
         }
+
+        cellClasses = dedupeByCourseSection(cellClasses);
 
         if (cellClasses.length > 1) clashCount++;
         const startLabel = formatSlot(slot).start;

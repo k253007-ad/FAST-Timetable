@@ -1,4 +1,5 @@
 import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { splitClassValue, formatClassLabel } from '../utils/courseColors.js';
 import {
   ACTIVITY_TYPES,
@@ -8,11 +9,37 @@ import {
   formatSlot,
   getAllTimeSlots,
   getClassOccurrences,
+  getOccupiedSlots,
   getRoomOptions,
   locateRoom,
   resolveRoomSelection,
 } from '../utils/schedule.js';
-import { IconAlert, IconChevronDown, IconInfo, IconPin, IconSearch, IconX } from './Icons.jsx';
+import { IconAlert, IconChevronDown, IconPin, IconSearch, IconX } from './Icons.jsx';
+
+// Custom activity names a student has typed in "Manage activities" — saved
+// so they show up in the type dropdown from then on instead of needing to be
+// retyped every time, until explicitly removed (2026-09-07). Device-wide,
+// not per-profile: it's a personal vocabulary of activity names, not part of
+// any one profile's schedule, so it's read/written directly here rather than
+// threaded through App.jsx's per-profile storage like `activities` itself.
+const CUSTOM_ACTIVITY_KEY = 'customActivityTypes';
+
+const getSavedCustomActivityNames = () => {
+  try {
+    const saved = JSON.parse(localStorage.getItem(CUSTOM_ACTIVITY_KEY) || '[]');
+    return Array.isArray(saved) ? saved : [];
+  } catch {
+    return [];
+  }
+};
+
+const saveCustomActivityNames = (names) => {
+  try {
+    localStorage.setItem(CUSTOM_ACTIVITY_KEY, JSON.stringify(names));
+  } catch {
+    /* storage unavailable */
+  }
+};
 
 // Memoized so toggling one checkbox doesn't force React to re-diff every
 // other row in a list that can run into the hundreds (all courses, unfiltered).
@@ -77,6 +104,130 @@ const useDismissOnOutside = (isOpen, onClose, ref) => {
   }, [isOpen, onClose, ref]);
 };
 
+// Generic "tap a trigger, a panel of option rows drops down below it" shell
+// — shared by CourseDropdown (single-select, closes on pick) and the
+// "Manage activities" time-slot picker (multi-select checkboxes, stays open
+// across picks) below, so the open/close/outside-dismiss wiring isn't
+// duplicated between them. Not a search box — no filtering, just a plain
+// dropdown list, same visual language (`.combobox`/`.combobox-panel`/
+// `.option-row`) as the rest of this app's pickers.
+const DropdownShell = ({ label, open, onToggle, onClose, ariaLabel, children }) => {
+  const wrapRef = useRef(null);
+  useDismissOnOutside(open, onClose, wrapRef);
+  return (
+    <div className="combobox" ref={wrapRef}>
+      <button
+        type="button"
+        className="combobox-input combobox-trigger"
+        onClick={onToggle}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-label={ariaLabel}
+      >
+        <span className="combobox-trigger-label">{label}</span>
+      </button>
+      <span className="combobox-action" aria-hidden="true">
+        <IconChevronDown size={15} className={open ? 'is-flipped' : undefined} />
+      </span>
+      {open && (
+        <div className="combobox-panel" role="group" aria-label={ariaLabel}>
+          <div className="combobox-list">{children}</div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// Single-select course picker for "Add extra class" — a plain dropdown list
+// (no search box: reverted 2026-09-07 after feedback that a search input
+// wasn't wanted here) of the student's own selected courses, wrapping long
+// names inside `.option-course` like every other list in this app instead
+// of a native <select>'s trigger text, which was overflowing on narrow
+// phone screens for long course names.
+const CourseDropdown = ({ options, value, onChange }) => {
+  const [open, setOpen] = useState(false);
+  return (
+    <DropdownShell
+      label={value ? formatClassLabel(value) : 'Select a course'}
+      open={open}
+      onToggle={() => setOpen((v) => !v)}
+      onClose={() => setOpen(false)}
+      ariaLabel="Course for the extra class"
+    >
+      {options.map((v) => (
+        <button
+          key={v}
+          type="button"
+          className={`option-row option-row-sync${v === value ? ' is-checked' : ''}`}
+          onClick={() => {
+            onChange(v);
+            setOpen(false);
+          }}
+        >
+          <span className="option-text">
+            <span className="option-course">{formatClassLabel(v)}</span>
+          </span>
+        </button>
+      ))}
+    </DropdownShell>
+  );
+};
+
+// The 4 "My classes" sections (Selected courses / Adjust class times / Add
+// extra class / Manage activities) each open their content as a modal
+// dialog rather than expanding inline (2026-09-07, on request) — this is
+// the shared overlay/box every one of them renders through, portaled to
+// `document.body` so its fixed positioning is never trapped by an ancestor
+// with its own transform/overflow (the exact failure mode a plain
+// `position: fixed` div nested deep in the card could otherwise hit).
+// Replaces the separate per-section (i) Info popovers, which were dropped
+// as part of the same request.
+const Modal = ({ title, onBack, onClose, children }) => {
+  useEffect(() => {
+    const onKeyDown = (e) => {
+      if (e.key === 'Escape') onClose();
+    };
+    document.addEventListener('keydown', onKeyDown);
+    const { overflow } = document.body.style;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+      document.body.style.overflow = overflow;
+    };
+  }, [onClose]);
+
+  const titleId = useId();
+
+  return createPortal(
+    <div
+      className="modal-overlay"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div className="modal-box" role="dialog" aria-modal="true" aria-labelledby={titleId}>
+        <div className="modal-header">
+          <div className="modal-header-title">
+            {onBack && (
+              <button type="button" className="modal-back" onClick={onBack} aria-label="Back">
+                <IconChevronDown size={16} />
+              </button>
+            )}
+            <h3 className="modal-title" id={titleId}>
+              {title}
+            </h3>
+          </div>
+          <button type="button" className="modal-close" onClick={onClose} aria-label="Close">
+            <IconX size={18} />
+          </button>
+        </div>
+        <div className="modal-body">{children}</div>
+      </div>
+    </div>,
+    document.body
+  );
+};
+
 // Rendering the full unfiltered list (800+ courses) as real DOM nodes is the
 // actual source of occasional lag when the dropdown first opens or the
 // search is cleared back to empty — capping how many rows mount at once
@@ -127,105 +278,6 @@ const SyncOptionRow = memo(({ name, count, active, onSelect }) => (
   </button>
 ));
 SyncOptionRow.displayName = 'SyncOptionRow';
-
-// Single-select searchable course picker for "Add extra class" — the same
-// combobox pattern (search input + dropdown panel of real rows) as the
-// Course tab's own search, added 2026-09-01 to replace a plain native
-// <select> there: a native <select>'s long option text (course names run
-// well past 40 characters) could overflow a narrow phone screen, where this
-// custom panel just wraps it in `.option-course` like every other list in
-// this app already does. Closed, the input shows the current pick's label;
-// focusing it clears to a blank search box, and choosing a row closes the
-// panel and restores the (new) pick's label — same show-selection-when-
-// closed convention as a normal <select>, just rendered with this app's own
-// searchable list instead of the OS's.
-const CourseCombobox = ({ options, value, onChange }) => {
-  const [query, setQuery] = useState('');
-  const [open, setOpen] = useState(false);
-  const wrapRef = useRef(null);
-  const inputRef = useRef(null);
-  const panelId = useId();
-
-  useDismissOnOutside(open, () => setOpen(false), wrapRef);
-
-  const filtered = useMemo(() => {
-    const tokens = query.toLowerCase().split(/\s+/).filter(Boolean);
-    if (tokens.length === 0) return options;
-    return options.filter((v) => {
-      const haystack = v.toLowerCase();
-      return tokens.every((t) => haystack.includes(t));
-    });
-  }, [options, query]);
-
-  const closeAndRestore = () => {
-    setOpen(false);
-    setQuery('');
-  };
-
-  return (
-    <div className="combobox" ref={wrapRef}>
-      <input
-        ref={inputRef}
-        type="search"
-        enterKeyHint="search"
-        className="combobox-input"
-        placeholder="Search course"
-        value={open ? query : value ? formatClassLabel(value) : ''}
-        onChange={(e) => {
-          setQuery(e.target.value);
-          setOpen(true);
-        }}
-        onFocus={() => {
-          setQuery('');
-          setOpen(true);
-        }}
-        onClick={() => setOpen(true)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') e.target.blur();
-          if (e.key === 'Escape') closeAndRestore();
-        }}
-        role="combobox"
-        aria-expanded={open}
-        aria-controls={panelId}
-        aria-label="Course for the extra class"
-        autoComplete="off"
-        spellCheck="false"
-      />
-      <SearchAction query={open ? query : ''} onClear={() => setQuery('')} />
-
-      {open && (
-        <div className="combobox-panel" id={panelId} role="group" aria-label="Matching courses">
-          <div className="combobox-meta">
-            {filtered.length === options.length
-              ? `${options.length} of your classes`
-              : `${filtered.length} of ${options.length}`}
-          </div>
-          <div className="combobox-list">
-            {filtered.length === 0 ? (
-              <div className="combobox-empty">No classes match “{query}”.</div>
-            ) : (
-              filtered.slice(0, MAX_VISIBLE_RESULTS).map((v) => (
-                <button
-                  key={v}
-                  type="button"
-                  className={`option-row option-row-sync${v === value ? ' is-checked' : ''}`}
-                  onClick={() => {
-                    onChange(v);
-                    closeAndRestore();
-                  }}
-                >
-                  <span className="option-text">
-                    <span className="option-course">{formatClassLabel(v)}</span>
-                  </span>
-                </button>
-              ))
-            )}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-};
 
 // A labeled row of directly-tappable option buttons — the on-screen
 // alternative to a native <select> used throughout the "Adjust class times"
@@ -322,44 +374,15 @@ const RoomFields = ({ roomOptions, sel, onBuildingChange, onTypeChange, onLetter
   );
 };
 
-// One row in the "Adjust class times" panel — a single (Course, Section,
-// Day) occurrence with its official time/room, an active override's "moved
-// to" time/room if any, and the day/slot/room pickers to set or change one.
-// Its own local `day`/`slot`/`roomSel` state is the *pending* pick — nothing
-// happens until "Move" is clicked, so browsing the dropdowns doesn't touch
-// the real schedule. Seeded once at mount from the active override (if any)
-// or the occurrence's own official room — same one-time-seed limitation
-// day/slot already had (doesn't re-sync if the override changes later from
-// elsewhere), not a new tradeoff introduced by adding room.
-//
-// The row collapses to just an "Edit" button by default (added 2026-09-01,
-// "many people dont want to be bombarded with alot of options" — a native
-// Day/Slot/Room <select> row was still a lot to take in even collapsed to
-// 3-4 controls). Clicking Edit opens a panel with Day/Slot as plain
-// <select>s — **deliberately the same control as "Add extra class" uses**
-// (a same-day correction: an earlier pass made these PillOptions tap-to-pick
-// buttons, but the user asked for Day/Slot here to match Add extra class
-// exactly) — plus the same "Change room" -> RoomFields progressive
-// disclosure as before; RoomFields itself still renders as PillOptions,
-// since that's shared with (and thus automatically consistent with) Add
-// extra class's own room picker. `effectiveRoomSel` already defaults to the
-// occurrence's own current room regardless of whether the room picker's
-// ever opened, so leaving it collapsed and clicking Move is a no-op on
-// Room, not an error. The edit panel starts pre-expanded only if there's
-// already an active override, so reopening a customized row doesn't hide
-// the fact that it has one.
-const RescheduleRow = ({ occurrence, timeSlots, activeOverride, roomOptions, onMove, onReset }) => {
+// A read-only row in the "Adjust class times" courses step (2026-09-07: the
+// modal is now a Day -> Courses -> Edit wizard, not one long list with
+// inline-expanding edit panels) — course info, its official time/room, an
+// active override's "moved to" info if any, and Edit/Reset. Clicking Edit
+// hands the occurrence up to the modal, which switches to the edit step
+// (RescheduleEditScreen below) rather than expanding anything inline.
+const RescheduleSummaryRow = ({ occurrence, activeOverride, onEditClick, onReset }) => {
   const officialStart = formatSlot(occurrence.slots[0]).start;
   const officialEnd = formatSlot(occurrence.slots[occurrence.slots.length - 1]).end;
-  const [editing, setEditing] = useState(() => Boolean(activeOverride));
-  const [day, setDay] = useState(activeOverride ? activeOverride.newDay : occurrence.day);
-  const [slot, setSlot] = useState(activeOverride ? activeOverride.newTime : occurrence.slots[0]);
-  const [roomSel, setRoomSel] = useState(
-    () => locateRoom(roomOptions, activeOverride?.newRoom || occurrence.room) || {}
-  );
-  const [showRoomPicker, setShowRoomPicker] = useState(() => Boolean(activeOverride?.newRoom));
-  const effectiveRoomSel = resolveRoomSelection(roomOptions, roomSel);
-
   return (
     <div className="reschedule-row">
       <div className="reschedule-info">
@@ -377,94 +400,111 @@ const RescheduleRow = ({ occurrence, timeSlots, activeOverride, roomOptions, onM
           </span>
         )}
       </div>
-
-      {!editing && (
-        <div className="reschedule-controls">
-          <button type="button" className="action-btn" onClick={() => setEditing(true)}>
-            Edit
+      <div className="reschedule-controls">
+        <button type="button" className="action-btn-blue" onClick={onEditClick}>
+          Edit
+        </button>
+        {activeOverride && (
+          <button type="button" className="action-btn" onClick={onReset}>
+            Reset
           </button>
-          {activeOverride && (
-            <button type="button" className="link-button" onClick={onReset}>
-              Reset
-            </button>
-          )}
-        </div>
-      )}
+        )}
+      </div>
+    </div>
+  );
+};
 
-      {editing && (
-        <div className="reschedule-edit-panel">
-          <div className="reschedule-field-row">
-            <select
-              className="reschedule-select"
-              value={day}
-              onChange={(e) => setDay(e.target.value)}
-              aria-label={`New day for ${occurrence.course}`}
-            >
-              {DAY_ORDER.map((d) => (
-                <option key={d} value={d}>
-                  {d}
-                </option>
-              ))}
-            </select>
-            <select
-              className="reschedule-select"
-              value={slot}
-              onChange={(e) => setSlot(e.target.value)}
-              aria-label={`New time slot for ${occurrence.course}`}
-            >
-              {timeSlots.map((s, i) => (
-                <option key={s} value={s}>
-                  {`Slot ${i + 1} · ${formatSlot(s).start}`}
-                </option>
-              ))}
-            </select>
-          </div>
-          {showRoomPicker ? (
-            <RoomFields
-              roomOptions={roomOptions}
-              sel={effectiveRoomSel}
-              onBuildingChange={(building) => setRoomSel({ building })}
-              onTypeChange={(type) => setRoomSel({ building: effectiveRoomSel.building, type })}
-              onLetterChange={(letter) =>
-                setRoomSel({ building: effectiveRoomSel.building, type: effectiveRoomSel.type, letter })
-              }
-              onNumberChange={(number) => setRoomSel({ ...effectiveRoomSel, number })}
-              onLabRoomChange={(labRoom) => setRoomSel({ ...effectiveRoomSel, labRoom })}
-            />
-          ) : (
-            <button type="button" className="action-btn-blue" onClick={() => setShowRoomPicker(true)}>
-              Change room
-            </button>
-          )}
-          <div className="reschedule-edit-actions">
-            <button
-              type="button"
-              className="action-btn-blue"
-              onClick={() => {
-                onMove(day, slot, effectiveRoomSel.resolvedRoom);
-                setEditing(false);
-              }}
-            >
-              {activeOverride ? 'Update' : 'Move'}
-            </button>
-            <button type="button" className="action-btn-blue" onClick={() => setEditing(false)}>
-              Cancel
-            </button>
-            {activeOverride && (
-              <button
-                type="button"
-                className="link-button"
-                onClick={() => {
-                  onReset();
-                  setEditing(false);
-                }}
-              >
-                Reset
-              </button>
-            )}
-          </div>
-        </div>
+// The "Adjust class times" wizard's edit step — its own full screen (see
+// the modal's onBack-driven header above), not an inline panel. Day/Slot
+// are native <select>s (2026-09-07: "dont remove days and slots dropdown"
+// — a same-day reversal of a brief PillOptions experiment); Room is always
+// shown as RoomFields, no "Change room" toggle, since `effectiveRoomSel`
+// already defaults correctly to the occurrence's own current room whether
+// or not the student ever touches it. Its own local `day`/`slot`/`roomSel`
+// state is the *pending* pick — nothing happens until Move/Update is
+// clicked. `onMove` returns whether it succeeded (a move can fail — not
+// enough slots left in the target day — in which case this screen stays
+// open with the error shown instead of navigating back).
+const RescheduleEditScreen = ({ occurrence, timeSlots, activeOverride, roomOptions, moveError, onMove, onReset }) => {
+  const [day, setDay] = useState(activeOverride ? activeOverride.newDay : occurrence.day);
+  const [slot, setSlot] = useState(activeOverride ? activeOverride.newTime : occurrence.slots[0]);
+  const [roomSel, setRoomSel] = useState(
+    () => locateRoom(roomOptions, activeOverride?.newRoom || occurrence.room) || {}
+  );
+  const effectiveRoomSel = resolveRoomSelection(roomOptions, roomSel);
+
+  const officialStart = formatSlot(occurrence.slots[0]).start;
+  const officialEnd = formatSlot(occurrence.slots[occurrence.slots.length - 1]).end;
+
+  return (
+    <div className="reschedule-edit-panel">
+      <div className="reschedule-edit-summary">
+        <span className="reschedule-official">
+          Official: {occurrence.day}, {officialStart}–{officialEnd} · {cleanRoom(occurrence.room)}
+        </span>
+        {activeOverride && (
+          <span className="reschedule-moved">
+            Moved to {activeOverride.newDay}, {formatSlot(activeOverride.newTime).start}
+            {activeOverride.newRoom && ` · ${cleanRoom(activeOverride.newRoom)}`}
+          </span>
+        )}
+      </div>
+      {moveError && (
+        <p className="reschedule-error" role="alert">
+          {moveError}
+        </p>
       )}
+      <div className="reschedule-field-row">
+        <select
+          className="reschedule-select"
+          value={day}
+          onChange={(e) => setDay(e.target.value)}
+          aria-label={`New day for ${occurrence.course}`}
+        >
+          {DAY_ORDER.map((d) => (
+            <option key={d} value={d}>
+              {d}
+            </option>
+          ))}
+        </select>
+        <select
+          className="reschedule-select"
+          value={slot}
+          onChange={(e) => setSlot(e.target.value)}
+          aria-label={`New time slot for ${occurrence.course}`}
+        >
+          {timeSlots.map((s, i) => (
+            <option key={s} value={s}>
+              {`Slot ${i + 1} · ${formatSlot(s).start}`}
+            </option>
+          ))}
+        </select>
+      </div>
+      <RoomFields
+        roomOptions={roomOptions}
+        sel={effectiveRoomSel}
+        onBuildingChange={(building) => setRoomSel({ building })}
+        onTypeChange={(type) => setRoomSel({ building: effectiveRoomSel.building, type })}
+        onLetterChange={(letter) =>
+          setRoomSel({ building: effectiveRoomSel.building, type: effectiveRoomSel.type, letter })
+        }
+        onNumberChange={(number) => setRoomSel({ ...effectiveRoomSel, number })}
+        onLabRoomChange={(labRoom) => setRoomSel({ ...effectiveRoomSel, labRoom })}
+      />
+      <div className="reschedule-edit-actions">
+        <button
+          type="button"
+          className="action-btn-blue"
+          onClick={() => onMove(day, slot, effectiveRoomSel.resolvedRoom)}
+        >
+          {activeOverride ? 'Update' : 'Move'}
+        </button>
+        {activeOverride && (
+          <button type="button" className="link-button" onClick={onReset}>
+            Reset
+          </button>
+        )}
+      </div>
     </div>
   );
 };
@@ -545,43 +585,37 @@ const ClassSelector = ({
   const [open, setOpen] = useState(false);
   const [minimized, setMinimized] = useState(false);
   const [showChips, setShowChips] = useState(false);
-  const [showChipsInfo, setShowChipsInfo] = useState(false);
   const [showReschedule, setShowReschedule] = useState(false);
-  const [showRescheduleInfo, setShowRescheduleInfo] = useState(false);
+  // A 3-step wizard inside the "Adjust class times" modal (2026-09-07):
+  // `rescheduleDay === null` shows only the 5 day buttons; picking a day
+  // shows only that day's courses; picking Edit on one of those shows only
+  // its edit form (`editingOccurrence`). Both reset to null whenever the
+  // modal closes (see closeReschedule below), so it always reopens at the
+  // day-picker step rather than wherever it was left.
+  const [rescheduleDay, setRescheduleDay] = useState(null);
+  const [editingOccurrence, setEditingOccurrence] = useState(null);
   const [moveError, setMoveError] = useState('');
   const [showExtra, setShowExtra] = useState(false);
-  const [showExtraInfo, setShowExtraInfo] = useState(false);
   const [extraCourseValue, setExtraCourseValue] = useState('');
   const [extraDay, setExtraDay] = useState(DAY_ORDER[0]);
   const [extraSlot, setExtraSlot] = useState('');
   const [extraError, setExtraError] = useState('');
-  const [showExtraRoomPicker, setShowExtraRoomPicker] = useState(false);
   const [showSyncInfo, setShowSyncInfo] = useState(false);
   const [showActivities, setShowActivities] = useState(false);
-  const [showActivitiesInfo, setShowActivitiesInfo] = useState(false);
-  const [showActivityList, setShowActivityList] = useState(false);
   const [activityType, setActivityType] = useState(ACTIVITY_TYPES[0]);
   const [isCustomActivity, setIsCustomActivity] = useState(false);
   const [customActivityName, setCustomActivityName] = useState('');
+  const [customActivityNames, setCustomActivityNames] = useState(getSavedCustomActivityNames);
   const [activityDay, setActivityDay] = useState(DAY_ORDER[0]);
-  const [activitySlot, setActivitySlot] = useState('');
   const [activityError, setActivityError] = useState('');
   const comboboxRef = useRef(null);
   const inputRef = useRef(null);
   const groupInputRef = useRef(null);
-  const rescheduleInfoRef = useRef(null);
-  const extraInfoRef = useRef(null);
   const syncBadgeRef = useRef(null);
-  const chipsInfoRef = useRef(null);
-  const activitiesInfoRef = useRef(null);
   const panelId = useId();
   const groupPanelId = useId();
 
-  useDismissOnOutside(showRescheduleInfo, () => setShowRescheduleInfo(false), rescheduleInfoRef);
-  useDismissOnOutside(showExtraInfo, () => setShowExtraInfo(false), extraInfoRef);
   useDismissOnOutside(showSyncInfo, () => setShowSyncInfo(false), syncBadgeRef);
-  useDismissOnOutside(showChipsInfo, () => setShowChipsInfo(false), chipsInfoRef);
-  useDismissOnOutside(showActivitiesInfo, () => setShowActivitiesInfo(false), activitiesInfoRef);
 
   // Close on outside click / Escape while the dropdown is open. "Outside"
   // means outside the search box + its panel — not just outside the whole
@@ -667,14 +701,18 @@ const ClassSelector = ({
     o.day === occurrence.day &&
     occurrence.slots.includes(o.time);
 
+  // Returns whether the move succeeded, so the edit screen knows whether to
+  // navigate back to the courses list (success) or stay put showing the
+  // error (failure — not enough slots left in the target day).
   const handleMove = (occurrence, newDay, newStartSlot, newRoom) => {
     const entries = buildMoveOverrides(occurrence, timeSlots, newDay, newStartSlot, newRoom);
     if (!entries) {
       setMoveError(`Not enough time slots left in ${newDay} to fit this class.`);
-      return;
+      return false;
     }
     setMoveError('');
     setOverrides((prev) => [...prev.filter((o) => !belongsToOccurrence(o, occurrence)), ...entries]);
+    return true;
   };
 
   const handleResetMove = (occurrence) => {
@@ -705,10 +743,10 @@ const ClassSelector = ({
   // `extraRoomSel` has a `building` and their own picks take over. Doesn't
   // re-seed from the course's room if the course is changed afterward (same
   // "sticky, no resync effect" behavior effectiveExtraSlot above already has).
-  // `showExtraRoomPicker` (added same day, after "too many options" feedback)
-  // keeps the 4 room selects hidden behind a "Change room" link by default —
-  // most extra classes happen in the same room as usual, so the always-on
-  // default (`effectiveExtraRoomSel` resolving to the course's real room) is
+  // Always shown, no "Change room" toggle (removed 2026-09-07, matching the
+  // same change already made to "Adjust class times") — most extra classes
+  // happen in the same room as usual, so the always-on default
+  // (`effectiveExtraRoomSel` resolving to the course's real room) is
   // already correct without the student ever touching this.
   const extraTemplateRoom = useMemo(() => {
     if (!effectiveExtraCourse) return '';
@@ -752,41 +790,71 @@ const ClassSelector = ({
   // App.jsx auto-removes an activity the moment a course ends up in its
   // slot, so there's no duplicate-clash check needed here beyond "not the
   // same activity twice".
-  const effectiveActivitySlot = timeSlots.includes(activitySlot) ? activitySlot : timeSlots[0] || '';
 
-  // Always Monday..Friday, Slot 1..9 in the list regardless of add order —
-  // sorted by day index then slot index, not insertion order.
-  const sortedActivities = useMemo(() => {
-    return [...activities].sort((a, b) => {
-      const dayDiff = DAY_ORDER.indexOf(a.day) - DAY_ORDER.indexOf(b.day);
-      if (dayDiff !== 0) return dayDiff;
-      return timeSlots.indexOf(a.time) - timeSlots.indexOf(b.time);
-    });
-  }, [activities, timeSlots]);
+  // Only offer slots the student is actually free for on the chosen day —
+  // `getOccupiedSlots` is the same "does a real course sit here" check
+  // App.jsx's own auto-removal effect uses, so a slot that disappears from
+  // this list is exactly one that would auto-remove the activity anyway.
+  const occupiedSlots = useMemo(
+    () => getOccupiedSlots(data, selectedClasses, overrides),
+    [data, selectedClasses, overrides]
+  );
+  const freeSlotsForDay = useMemo(
+    () => timeSlots.filter((s) => !occupiedSlots.has(`${activityDay}|${s}`)),
+    [timeSlots, occupiedSlots, activityDay]
+  );
 
-  const handleAddActivity = () => {
-    const effectiveType = isCustomActivity ? customActivityName.trim() : activityType;
+  const effectiveActivityType = isCustomActivity ? customActivityName.trim() : activityType;
+
+  // Tapping a slot adds/removes the activity immediately — no separate
+  // "Add" step. Whether a slot already has an activity is checked against
+  // *any* type at that day+time, not just the currently-selected type
+  // (2026-09-07: "when i switch to cafe the library on slots must remain"
+  // — switching the Type dropdown must never make an already-assigned
+  // slot's own display revert to looking unassigned just because it
+  // doesn't match whatever's newly selected). Tapping an already-assigned
+  // slot removes *that* slot's actual activity, regardless of the
+  // currently-selected type; tapping a genuinely empty slot assigns the
+  // currently-selected type to it.
+  const toggleActivitySlot = (slot) => {
+    const existing = activities.find((a) => a.day === activityDay && a.time === slot);
+    if (existing) {
+      setActivities((prev) => prev.filter((a) => a !== existing));
+      return;
+    }
+
+    const effectiveType = effectiveActivityType;
     if (!effectiveType) {
       setActivityError('Enter a name for the custom activity.');
       return;
     }
-    if (!effectiveActivitySlot) return;
-    const alreadyAdded = activities.some(
-      (a) => a.type === effectiveType && a.day === activityDay && a.time === effectiveActivitySlot
-    );
-    if (alreadyAdded) {
-      setActivityError('That activity is already added for this day and slot.');
-      return;
-    }
     setActivityError('');
-    setActivities((prev) => [...prev, { type: effectiveType, day: activityDay, time: effectiveActivitySlot }]);
-    if (isCustomActivity) setCustomActivityName('');
+    setActivities((prev) => [...prev, { type: effectiveType, day: activityDay, time: slot }]);
+
+    // Save a genuinely new custom name into the persisted dropdown list, and
+    // switch the picker straight to it (not back to "Custom…") so checking
+    // more slots for the same activity works without retyping — see
+    // CUSTOM_ACTIVITY_KEY above.
+    if (isCustomActivity) {
+      if (!ACTIVITY_TYPES.includes(effectiveType) && !customActivityNames.includes(effectiveType)) {
+        const next = [...customActivityNames, effectiveType];
+        setCustomActivityNames(next);
+        saveCustomActivityNames(next);
+      }
+      setIsCustomActivity(false);
+      setActivityType(effectiveType);
+      setCustomActivityName('');
+    }
   };
 
-  const handleRemoveActivity = (activity) => {
-    setActivities((prev) =>
-      prev.filter((a) => !(a.type === activity.type && a.day === activity.day && a.time === activity.time))
-    );
+  // Removes a saved custom name from the type dropdown only — any
+  // activities already scheduled with that name keep working exactly as
+  // before, this just stops offering it as an option for new ones.
+  const handleRemoveCustomType = (name) => {
+    const next = customActivityNames.filter((n) => n !== name);
+    setCustomActivityNames(next);
+    saveCustomActivityNames(next);
+    if (!isCustomActivity && activityType === name) setActivityType(ACTIVITY_TYPES[0]);
   };
 
   const hasData = allClasses.length > 0;
@@ -960,37 +1028,41 @@ const ClassSelector = ({
           </div>
         </div>
 
-        {!minimized &&
-          (linkedSync ? (
-            <div className="synced-indicator" ref={syncBadgeRef}>
-              <button
-                type="button"
-                className="synced-indicator-btn"
-                onClick={() => setShowSyncInfo((v) => !v)}
-                aria-expanded={showSyncInfo}
-                aria-label={`Synced with ${linkedSync.type === 'rollno' ? 'Roll No' : 'Section'} ${linkedSync.value} — press for info and to cancel syncing`}
-              >
-                {linkedSync.type === 'rollno' ? 'Roll No' : 'Section'} {linkedSync.value}
-              </button>
-              {showSyncInfo && (
-                <div className="info-popover" role="tooltip">
-                  Your classes are replaced with {linkedSync.type === 'rollno' ? 'this roll number' : 'this section'}
-                  &rsquo;s current schedule automatically — the first time it&rsquo;s picked, and again every time
-                  the timetable refreshes. Cancel to pick classes yourself again.
-                  <button
-                    type="button"
-                    className="link-button"
-                    onClick={() => {
-                      setLinkedSync(null);
-                      setShowSyncInfo(false);
-                    }}
-                  >
-                    Cancel sync
-                  </button>
-                </div>
-              )}
-            </div>
-          ) : (
+        {linkedSync ? (
+          // Deliberately NOT gated by `!minimized` (2026-09-07, on request)
+          // — a sync being active is important status the student should
+          // always see, even with "My classes" collapsed down to just the
+          // minimize toggle.
+          <div className="synced-indicator" ref={syncBadgeRef}>
+            <button
+              type="button"
+              className="synced-indicator-btn"
+              onClick={() => setShowSyncInfo((v) => !v)}
+              aria-expanded={showSyncInfo}
+              aria-label={`Synced with ${linkedSync.type === 'rollno' ? 'Roll No' : 'Section'} ${linkedSync.value} — press for info and to cancel syncing`}
+            >
+              {linkedSync.type === 'rollno' ? 'Roll No' : 'Section'} {linkedSync.value}
+            </button>
+            {showSyncInfo && (
+              <div className="info-popover" role="tooltip">
+                Your classes are replaced with {linkedSync.type === 'rollno' ? 'this roll number' : 'this section'}
+                &rsquo;s current schedule automatically — the first time it&rsquo;s picked, and again every time
+                the timetable refreshes. Cancel to pick classes yourself again.
+                <button
+                  type="button"
+                  className="link-button"
+                  onClick={() => {
+                    setLinkedSync(null);
+                    setShowSyncInfo(false);
+                  }}
+                >
+                  Cancel sync
+                </button>
+              </div>
+            )}
+          </div>
+        ) : (
+          !minimized && (
             <div className="mode-tabs" role="tablist" aria-label="Selection mode">
               <button
                 type="button"
@@ -1029,7 +1101,8 @@ const ClassSelector = ({
                 Teacher
               </button>
             </div>
-          ))}
+          )
+        )}
       </div>
 
       {!minimized && !linkedSync && mode === 'manual' && (
@@ -1188,407 +1261,395 @@ const ClassSelector = ({
         </div>
       )}
 
-      {!minimized &&
-        (selectedClasses.length > 0 ? (
-          <div className="chip-toggle-wrap">
-            <div className="reschedule-header">
-              <button
-                type="button"
-                className="link-button reschedule-toggle"
-                onClick={() => setShowChips((v) => !v)}
-                aria-expanded={showChips}
-              >
-                Selected courses ({selectedClasses.length})
-                <IconChevronDown size={13} className={showChips ? 'is-flipped' : undefined} />
-              </button>
-
-              <div className="reschedule-info-wrap" ref={chipsInfoRef}>
-                <button
-                  type="button"
-                  className="info-btn"
-                  onClick={() => setShowChipsInfo((v) => !v)}
-                  aria-expanded={showChipsInfo}
-                  aria-label="What is this list?"
-                >
-                  <IconInfo size={18} />
-                  <span>Info</span>
-                </button>
-                {showChipsInfo && (
-                  <div className="info-popover" role="tooltip">
-                    Every class currently on your timetable. Tap the arrow to show or hide the
-                    list, and use the × on a class to remove it.
-                  </div>
-                )}
-              </div>
-            </div>
-            {showChips && (
-              <ul className="chip-row" aria-label="Selected sections">
-                {selectedClasses.map((value) => {
-                  const { course } = splitClassValue(value);
-                  return (
-                    <li key={value} className="chip" title={formatClassLabel(value)}>
-                      <span
-                        className="chip-dot"
-                        style={{ backgroundColor: courseColors[course] || 'var(--text-3)' }}
-                      />
-                      <span className="chip-label">{formatClassLabel(value)}</span>
-                      <button
-                        type="button"
-                        className="chip-remove"
-                        aria-label={`Remove ${formatClassLabel(value)}`}
-                        onClick={() => removeClass(value)}
-                      >
-                        <IconX size={16} />
-                      </button>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-          </div>
-        ) : (
-          <p className="selector-hint">
-            Pick the sections you’re enrolled in — your timetable builds itself below and stays
-            saved on this device.
-          </p>
-        ))}
-
-      {!minimized && occurrences.length > 0 && (
-        <div className="reschedule-section">
-          <div className="reschedule-header">
-            <button
-              type="button"
-              className="link-button reschedule-toggle"
-              onClick={() => setShowReschedule((v) => !v)}
-              aria-expanded={showReschedule}
-            >
-              Adjust class times
-              <IconChevronDown size={13} className={showReschedule ? 'is-flipped' : undefined} />
-            </button>
-
-            <div className="reschedule-info-wrap" ref={rescheduleInfoRef}>
-              <button
-                type="button"
-                className="info-btn"
-                onClick={() => setShowRescheduleInfo((v) => !v)}
-                aria-expanded={showRescheduleInfo}
-                aria-label="What does adjusting class times do?"
-              >
-                <IconInfo size={18} />
-                <span>Info</span>
-              </button>
-              {showRescheduleInfo && (
-                <div className="info-popover" role="tooltip">
-                  Moved by the university but the official sheet hasn’t caught up yet? Set a
-                  different day/time here — it only changes what you see, not the shared
-                  schedule.
-                </div>
-              )}
-            </div>
-          </div>
-
-          {showReschedule && (
-            <div className="reschedule-panel">
-              {moveError && (
-                <p className="reschedule-error" role="alert">
-                  {moveError}
-                </p>
-              )}
-              <div className="reschedule-list">
-                {occurrences.map((occurrence) => {
-                  const activeOverride = findActiveOverride(occurrence);
-                  return (
-                    <RescheduleRow
-                      key={`${occurrence.course}|${occurrence.section}|${occurrence.day}|${occurrence.slots[0]}`}
-                      occurrence={occurrence}
-                      timeSlots={timeSlots}
-                      activeOverride={activeOverride}
-                      roomOptions={roomOptions}
-                      onMove={(newDay, newSlot, newRoom) => handleMove(occurrence, newDay, newSlot, newRoom)}
-                      onReset={() => handleResetMove(occurrence)}
-                    />
-                  );
-                })}
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {!minimized && selectedClasses.length > 0 && (
-        <div className="reschedule-section">
-          <div className="reschedule-header">
-            <button
-              type="button"
-              className="link-button reschedule-toggle"
-              onClick={() => setShowExtra((v) => !v)}
-              aria-expanded={showExtra}
-            >
-              Add extra class
-              <IconChevronDown size={13} className={showExtra ? 'is-flipped' : undefined} />
-            </button>
-
-            <div className="reschedule-info-wrap" ref={extraInfoRef}>
-              <button
-                type="button"
-                className="info-btn"
-                onClick={() => setShowExtraInfo((v) => !v)}
-                aria-expanded={showExtraInfo}
-                aria-label="What does adding an extra class do?"
-              >
-                <IconInfo size={18} />
-                <span>Info</span>
-              </button>
-              {showExtraInfo && (
-                <div className="info-popover" role="tooltip">
-                  For a one-off makeup or revision class. Pick one of your already-selected
-                  courses and a day/slot — it won’t appear on print or downloaded images, and
-                  removes itself once the class time has passed.
-                </div>
-              )}
-            </div>
-          </div>
-
-          {showExtra && (
-            <div className="reschedule-panel">
-              {extraError && (
-                <p className="reschedule-error" role="alert">
-                  {extraError}
-                </p>
-              )}
-              <div className="reschedule-edit-panel">
-                <CourseCombobox
-                  options={selectedClasses}
-                  value={effectiveExtraCourse}
-                  onChange={setExtraCourseValue}
-                />
-                <div className="reschedule-field-row">
-                  <select
-                    className="reschedule-select"
-                    value={extraDay}
-                    onChange={(e) => setExtraDay(e.target.value)}
-                    aria-label="Day for the extra class"
-                  >
-                    {DAY_ORDER.map((d) => (
-                      <option key={d} value={d}>
-                        {d}
-                      </option>
-                    ))}
-                  </select>
-                  <select
-                    className="reschedule-select"
-                    value={effectiveExtraSlot}
-                    onChange={(e) => setExtraSlot(e.target.value)}
-                    aria-label="Time slot for the extra class"
-                  >
-                    {timeSlots.map((s, i) => (
-                      <option key={s} value={s}>
-                        {`Slot ${i + 1} · ${formatSlot(s).start}`}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                {showExtraRoomPicker ? (
-                  <>
-                    <RoomFields
-                      roomOptions={roomOptions}
-                      sel={effectiveExtraRoomSel}
-                      onBuildingChange={(building) => setExtraRoomSel({ building })}
-                      onTypeChange={(type) => setExtraRoomSel({ building: effectiveExtraRoomSel.building, type })}
-                      onLetterChange={(letter) =>
-                        setExtraRoomSel({ building: effectiveExtraRoomSel.building, type: effectiveExtraRoomSel.type, letter })
-                      }
-                      onNumberChange={(number) => setExtraRoomSel({ ...effectiveExtraRoomSel, number })}
-                      onLabRoomChange={(labRoom) => setExtraRoomSel({ ...effectiveExtraRoomSel, labRoom })}
-                    />
-                    <div className="reschedule-edit-actions">
-                      <button type="button" className="action-btn-blue" onClick={handleAddExtra}>
-                        Add
-                      </button>
-                      <button type="button" className="action-btn-blue" onClick={() => setShowExtraRoomPicker(false)}>
-                        Cancel
-                      </button>
-                    </div>
-                  </>
-                ) : (
-                  <div className="reschedule-edit-actions">
-                    <button type="button" className="action-btn-blue" onClick={handleAddExtra}>
-                      Add
-                    </button>
-                    <button type="button" className="action-btn-blue" onClick={() => setShowExtraRoomPicker(true)}>
-                      Change room
-                    </button>
-                  </div>
-                )}
-              </div>
-
-              {extraClasses.length > 0 && (
-                <div className="reschedule-list">
-                  {extraClasses.map((extra) => (
-                    <div
-                      key={`${extra.course}|${extra.section}|${extra.day}|${extra.time}`}
-                      className="reschedule-row"
-                    >
-                      <div className="reschedule-info">
-                        <span className="reschedule-course">
-                          {extra.course}
-                          {extra.section !== 'N/A' && ` (${extra.section})`}
-                        </span>
-                        <span className="reschedule-official">
-                          {extra.day}, {formatSlot(extra.time).start}
-                          {extra.room && ` · ${cleanRoom(extra.room)}`}
-                        </span>
-                      </div>
-                      <div className="reschedule-controls">
-                        <button type="button" className="link-button" onClick={() => handleRemoveExtra(extra)}>
-                          Remove
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      )}
-
+      {/* The 4 "My classes" sections open as modals now, not inline-expanding
+          panels (2026-09-07, on request) — see Modal above. Always all 4
+          buttons, disabled with a title tooltip rather than hidden when
+          there's nothing to act on yet, so the row never jumps around. */}
       {!minimized && (
-        <div className="reschedule-section">
-          <div className="reschedule-header">
-            <button
-              type="button"
-              className="link-button reschedule-toggle"
-              onClick={() => setShowActivities((v) => !v)}
-              aria-expanded={showActivities}
-            >
-              Manage activities
-              <IconChevronDown size={13} className={showActivities ? 'is-flipped' : undefined} />
-            </button>
+        <div className="section-btn-row">
+          <button type="button" className="section-btn" onClick={() => setShowChips(true)}>
+            <span>Selected courses</span>
+            {selectedClasses.length > 0 && <span className="section-btn-count">{selectedClasses.length}</span>}
+          </button>
 
-            <div className="reschedule-info-wrap" ref={activitiesInfoRef}>
-              <button
-                type="button"
-                className="info-btn"
-                onClick={() => setShowActivitiesInfo((v) => !v)}
-                aria-expanded={showActivitiesInfo}
-                aria-label="What are activities?"
-              >
-                <IconInfo size={18} />
-                <span>Info</span>
-              </button>
-              {showActivitiesInfo && (
-                <div className="info-popover" role="tooltip">
-                  Block out personal time — library, prayer, a coffee break, or something of
-                  your own — so it shows on your timetable and reminds you like a class.
-                  Removed automatically if a real class ends up in that slot.
-                </div>
-              )}
-            </div>
-          </div>
+          <button
+            type="button"
+            className="section-btn"
+            onClick={() => setShowReschedule(true)}
+            disabled={occurrences.length === 0}
+            title={occurrences.length === 0 ? 'Select classes first' : undefined}
+          >
+            <span>Adjust class times</span>
+          </button>
 
-          {showActivities && (
-            <div className="reschedule-panel">
-              {activityError && (
-                <p className="reschedule-error" role="alert">
-                  {activityError}
-                </p>
-              )}
-              <div className="reschedule-edit-panel">
-                <select
-                  className="reschedule-select"
-                  value={isCustomActivity ? '__custom__' : activityType}
-                  onChange={(e) => {
-                    if (e.target.value === '__custom__') {
-                      setIsCustomActivity(true);
-                    } else {
-                      setIsCustomActivity(false);
-                      setActivityType(e.target.value);
-                    }
-                  }}
-                  aria-label="Activity type"
-                >
-                  {ACTIVITY_TYPES.map((t) => (
-                    <option key={t} value={t}>
-                      {t}
-                    </option>
-                  ))}
-                  <option value="__custom__">Custom…</option>
-                </select>
-                {isCustomActivity && (
-                  <input
-                    type="text"
-                    className="reschedule-select"
-                    placeholder="Custom activity name"
-                    value={customActivityName}
-                    onChange={(e) => setCustomActivityName(e.target.value)}
-                    aria-label="Custom activity name"
-                  />
-                )}
-                <div className="reschedule-field-row">
-                  <select
-                    className="reschedule-select"
-                    value={activityDay}
-                    onChange={(e) => setActivityDay(e.target.value)}
-                    aria-label="Day for the activity"
-                  >
-                    {DAY_ORDER.map((d) => (
-                      <option key={d} value={d}>
-                        {d}
-                      </option>
-                    ))}
-                  </select>
-                  <select
-                    className="reschedule-select"
-                    value={effectiveActivitySlot}
-                    onChange={(e) => setActivitySlot(e.target.value)}
-                    aria-label="Time slot for the activity"
-                  >
-                    {timeSlots.map((s, i) => (
-                      <option key={s} value={s}>
-                        {`Slot ${i + 1} · ${formatSlot(s).start}`}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div className="reschedule-edit-actions">
-                  <button type="button" className="action-btn-blue" onClick={handleAddActivity}>
-                    Add
-                  </button>
-                  {activities.length > 0 && (
+          <button
+            type="button"
+            className="section-btn"
+            onClick={() => setShowExtra(true)}
+            disabled={selectedClasses.length === 0}
+            title={selectedClasses.length === 0 ? 'Select classes first' : undefined}
+          >
+            <span>Add extra class</span>
+            {extraClasses.length > 0 && <span className="section-btn-count">{extraClasses.length}</span>}
+          </button>
+
+          <button type="button" className="section-btn" onClick={() => setShowActivities(true)}>
+            <span>Manage activities</span>
+            {activities.length > 0 && <span className="section-btn-count">{activities.length}</span>}
+          </button>
+        </div>
+      )}
+
+      {showChips && (
+        <Modal title="Selected courses" onClose={() => setShowChips(false)}>
+          {selectedClasses.length > 0 ? (
+            <ul className="chip-row" aria-label="Selected sections">
+              {selectedClasses.map((value) => {
+                const { course } = splitClassValue(value);
+                return (
+                  <li key={value} className="chip" title={formatClassLabel(value)}>
+                    <span
+                      className="chip-dot"
+                      style={{ backgroundColor: courseColors[course] || 'var(--text-3)' }}
+                    />
+                    <span className="chip-label">{formatClassLabel(value)}</span>
                     <button
                       type="button"
-                      className="action-btn-blue"
-                      onClick={() => setShowActivityList((v) => !v)}
+                      className="chip-remove"
+                      aria-label={`Remove ${formatClassLabel(value)}`}
+                      onClick={() => removeClass(value)}
                     >
-                      {showActivityList ? 'Hide Activities' : `Show Activities (${activities.length})`}
+                      <IconX size={16} />
                     </button>
+                  </li>
+                );
+              })}
+            </ul>
+          ) : (
+            <p className="selector-hint">
+              Pick the sections you’re enrolled in — your timetable builds itself below and stays
+              saved on this device.
+            </p>
+          )}
+        </Modal>
+      )}
+
+      {showReschedule &&
+        (() => {
+          // Reset the wizard back to step 1 (day picker) on close, so a
+          // reopen never lands mid-edit or on a stale day (2026-09-07).
+          const closeReschedule = () => {
+            setShowReschedule(false);
+            setRescheduleDay(null);
+            setEditingOccurrence(null);
+            setMoveError('');
+          };
+
+          if (editingOccurrence) {
+            return (
+              <Modal
+                title={editingOccurrence.course}
+                onBack={() => {
+                  setEditingOccurrence(null);
+                  setMoveError('');
+                }}
+                onClose={closeReschedule}
+              >
+                <RescheduleEditScreen
+                  occurrence={editingOccurrence}
+                  timeSlots={timeSlots}
+                  activeOverride={findActiveOverride(editingOccurrence)}
+                  roomOptions={roomOptions}
+                  moveError={moveError}
+                  onMove={(newDay, newSlot, newRoom) => {
+                    const ok = handleMove(editingOccurrence, newDay, newSlot, newRoom);
+                    if (ok) setEditingOccurrence(null);
+                  }}
+                  onReset={() => {
+                    handleResetMove(editingOccurrence);
+                    setEditingOccurrence(null);
+                  }}
+                />
+              </Modal>
+            );
+          }
+
+          if (rescheduleDay) {
+            const dayOccurrences = occurrences.filter((o) => o.day === rescheduleDay);
+            return (
+              <Modal title={rescheduleDay} onBack={() => setRescheduleDay(null)} onClose={closeReschedule}>
+                <div className="reschedule-list">
+                  {dayOccurrences.length === 0 ? (
+                    <p className="selector-hint">No classes on {rescheduleDay}.</p>
+                  ) : (
+                    dayOccurrences.map((occurrence) => (
+                      <RescheduleSummaryRow
+                        key={`${occurrence.course}|${occurrence.section}|${occurrence.day}|${occurrence.slots[0]}`}
+                        occurrence={occurrence}
+                        activeOverride={findActiveOverride(occurrence)}
+                        onEditClick={() => setEditingOccurrence(occurrence)}
+                        onReset={() => handleResetMove(occurrence)}
+                      />
+                    ))
                   )}
                 </div>
-              </div>
+              </Modal>
+            );
+          }
 
-              {showActivityList && sortedActivities.length > 0 && (
-                <div className="reschedule-list">
-                  {sortedActivities.map((activity) => (
-                    <div key={`${activity.type}|${activity.day}|${activity.time}`} className="reschedule-row">
-                      <div className="reschedule-info">
-                        <span className="reschedule-course">{activity.type}</span>
-                        <span className="reschedule-official">
-                          Slot {timeSlots.indexOf(activity.time) + 1} · {activity.day}, {formatSlot(activity.time).start}
-                        </span>
-                      </div>
-                      <div className="reschedule-controls">
-                        <button type="button" className="link-button" onClick={() => handleRemoveActivity(activity)}>
-                          Remove
-                        </button>
-                      </div>
-                    </div>
-                  ))}
+          // Step 1: only the 5 day buttons — nothing else on screen.
+          return (
+            <Modal title="Adjust class times" onClose={closeReschedule}>
+              {/* Top-to-bottom, not the Today view's horizontal row
+                  (2026-09-07) — .day-picker-vertical is additive so the
+                  shared .day-picker/.day-tab classes stay unchanged for
+                  Today's own picker. */}
+              <div className="day-picker day-picker-vertical" role="tablist" aria-label="Choose a day">
+                {DAY_ORDER.map((d) => (
+                  <button
+                    key={d}
+                    type="button"
+                    role="tab"
+                    className="day-tab"
+                    onClick={() => setRescheduleDay(d)}
+                  >
+                    {d}
+                    <IconChevronDown size={16} className="day-tab-chevron" />
+                  </button>
+                ))}
+              </div>
+            </Modal>
+          );
+        })()}
+
+      {showExtra && (
+        <Modal title="Add extra class" onClose={() => setShowExtra(false)}>
+          {extraError && (
+            <p className="reschedule-error" role="alert">
+              {extraError}
+            </p>
+          )}
+          <div className="reschedule-edit-panel">
+            <CourseDropdown
+              options={selectedClasses}
+              value={effectiveExtraCourse}
+              onChange={setExtraCourseValue}
+            />
+            <div className="reschedule-field-row">
+              <select
+                className="reschedule-select"
+                value={extraDay}
+                onChange={(e) => setExtraDay(e.target.value)}
+                aria-label="Day for the extra class"
+              >
+                {DAY_ORDER.map((d) => (
+                  <option key={d} value={d}>
+                    {d}
+                  </option>
+                ))}
+              </select>
+              <select
+                className="reschedule-select"
+                value={effectiveExtraSlot}
+                onChange={(e) => setExtraSlot(e.target.value)}
+                aria-label="Time slot for the extra class"
+              >
+                {timeSlots.map((s, i) => (
+                  <option key={s} value={s}>
+                    {`Slot ${i + 1} · ${formatSlot(s).start}`}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <RoomFields
+              roomOptions={roomOptions}
+              sel={effectiveExtraRoomSel}
+              onBuildingChange={(building) => setExtraRoomSel({ building })}
+              onTypeChange={(type) => setExtraRoomSel({ building: effectiveExtraRoomSel.building, type })}
+              onLetterChange={(letter) =>
+                setExtraRoomSel({ building: effectiveExtraRoomSel.building, type: effectiveExtraRoomSel.type, letter })
+              }
+              onNumberChange={(number) => setExtraRoomSel({ ...effectiveExtraRoomSel, number })}
+              onLabRoomChange={(labRoom) => setExtraRoomSel({ ...effectiveExtraRoomSel, labRoom })}
+            />
+            <div className="reschedule-edit-actions">
+              <button type="button" className="action-btn-blue" onClick={handleAddExtra}>
+                Add
+              </button>
+            </div>
+          </div>
+
+          {extraClasses.length > 0 && (
+            <div className="reschedule-list">
+              {extraClasses.map((extra) => (
+                <div
+                  key={`${extra.course}|${extra.section}|${extra.day}|${extra.time}`}
+                  className="reschedule-row"
+                >
+                  <div className="reschedule-info">
+                    <span className="reschedule-course">
+                      {extra.course}
+                      {extra.section !== 'N/A' && ` (${extra.section})`}
+                    </span>
+                    <span className="reschedule-official">
+                      {extra.day}, {formatSlot(extra.time).start}
+                      {extra.room && ` · ${cleanRoom(extra.room)}`}
+                    </span>
+                  </div>
+                  <div className="reschedule-controls">
+                    <button type="button" className="link-button" onClick={() => handleRemoveExtra(extra)}>
+                      Remove
+                    </button>
+                  </div>
                 </div>
-              )}
+              ))}
             </div>
           )}
-        </div>
+        </Modal>
+      )}
+
+      {showActivities && (
+        <Modal title="Manage activities" onClose={() => setShowActivities(false)}>
+          {activityError && (
+            <p className="reschedule-error" role="alert">
+              {activityError}
+            </p>
+          )}
+          <div className="reschedule-edit-panel">
+            <div className="reschedule-field-row">
+              <select
+                className="reschedule-select"
+                value={isCustomActivity ? '__custom__' : activityType}
+                onChange={(e) => {
+                  if (e.target.value === '__custom__') {
+                    setIsCustomActivity(true);
+                  } else {
+                    setIsCustomActivity(false);
+                    setActivityType(e.target.value);
+                  }
+                }}
+                aria-label="Activity type"
+              >
+                {ACTIVITY_TYPES.map((t) => (
+                  <option key={t} value={t}>
+                    {t}
+                  </option>
+                ))}
+                {customActivityNames.map((t) => (
+                  <option key={t} value={t}>
+                    {t}
+                  </option>
+                ))}
+                <option value="__custom__">Custom…</option>
+              </select>
+              {!isCustomActivity && customActivityNames.includes(activityType) && (
+                <button
+                  type="button"
+                  className="link-button"
+                  onClick={() => handleRemoveCustomType(activityType)}
+                  aria-label={`Remove "${activityType}" from the activity dropdown`}
+                >
+                  Remove from list
+                </button>
+              )}
+            </div>
+            {isCustomActivity && (
+              <input
+                type="text"
+                className="reschedule-select"
+                placeholder="Custom activity name"
+                value={customActivityName}
+                onChange={(e) => setCustomActivityName(e.target.value)}
+                aria-label="Custom activity name"
+              />
+            )}
+            <select
+              className="reschedule-select"
+              value={activityDay}
+              onChange={(e) => setActivityDay(e.target.value)}
+              aria-label="Day for the activity"
+            >
+              {DAY_ORDER.map((d) => (
+                <option key={d} value={d}>
+                  {d}
+                </option>
+              ))}
+            </select>
+            {/* Only free slots for the chosen day are offered — see
+                freeSlotsForDay above. Tapping a row adds/removes that slot
+                immediately — no separate Add step, no separate "selected
+                slots" list any more either (2026-09-07: "remove the
+                selected slots ... view and make it so if i click on slot
+                and it become library slot") — the slot itself IS the
+                feedback: an assigned slot's label switches from "Slot N ·
+                time" to the activity's own name (e.g. "Library"), with the
+                slot/time demoted to a small second line, `.is-checked`
+                highlighted. **A row shows whatever's actually assigned to
+                it, independent of the Type dropdown's current selection**
+                (2026-09-07 follow-up: "when i switch to cafe the library on
+                slots must remain") — switching the dropdown to "Cafe" must
+                not make an already-showing "Library" slot look unassigned
+                just because it isn't Cafe. Tapping an assigned row removes
+                *that slot's own* activity (whatever it is); tapping an
+                unassigned row assigns the currently-selected type. Plain
+                tappable rows, not checkboxes (a still-earlier request:
+                "remove check box from slots") — same .option-row-sync
+                button style as CourseDropdown/SyncOptionRow use. */}
+            <span className="room-field-label">Time slots</span>
+            <div className="activity-slot-list">
+              {freeSlotsForDay.length === 0 ? (
+                <div className="combobox-empty">No free slots on {activityDay}.</div>
+              ) : (
+                freeSlotsForDay.map((s) => {
+                  const i = timeSlots.indexOf(s);
+                  // Whatever's actually assigned to this slot, regardless
+                  // of the currently-selected Type — see toggleActivitySlot.
+                  const existing = activities.find((a) => a.day === activityDay && a.time === s);
+                  const slotLabel = `Slot ${i + 1} · ${formatSlot(s).start}`;
+
+                  // An assigned slot is no longer itself the tap target
+                  // (2026-09-07, on request: "add cross button to remove
+                  // activity from a slot") — a <button> can't contain
+                  // another <button>, so this becomes a static row with an
+                  // explicit `.chip-remove` X, same red-circle remove
+                  // control "Selected courses"' chips already use. An
+                  // unassigned slot stays a single tap-to-assign button.
+                  if (existing) {
+                    return (
+                      <div key={s} className="option-row option-row-sync option-row-static is-checked">
+                        <span className="option-text">
+                          <span className="option-course">{existing.type}</span>
+                          <span className="option-section">{slotLabel}</span>
+                        </span>
+                        <button
+                          type="button"
+                          className="chip-remove"
+                          aria-label={`Remove ${existing.type} from ${slotLabel}`}
+                          onClick={() => toggleActivitySlot(s)}
+                        >
+                          <IconX size={16} />
+                        </button>
+                      </div>
+                    );
+                  }
+
+                  return (
+                    <button
+                      key={s}
+                      type="button"
+                      className="option-row option-row-sync"
+                      onClick={() => toggleActivitySlot(s)}
+                    >
+                      <span className="option-text">
+                        <span className="option-course">{slotLabel}</span>
+                      </span>
+                    </button>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        </Modal>
       )}
       </section>
     </>

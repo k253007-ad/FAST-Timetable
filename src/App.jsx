@@ -12,12 +12,19 @@ import {
   getOccupiedSlots,
   isExtraExpired,
 } from './utils/schedule.js';
-import { useClassNotifications } from './hooks/useClassNotifications.js';
+import { useClassNotifications, getMainSchedule } from './hooks/useClassNotifications.js';
+import {
+  getOrCreateCalendarFeedId,
+  getCalendarFeedUrl,
+  pushCalendarSchedule,
+  openGoogleCalendarSubscribePrompt,
+} from './utils/calendarExport.js';
 import {
   BrandMark,
   IconAlert,
   IconBell,
   IconBellOff,
+  IconCalendar,
   IconGithub,
   IconPhone,
   IconPrinter,
@@ -460,6 +467,41 @@ function App() {
   );
 
   const canExport = status === 'ready' && selectedClasses.length > 0 && !exporting;
+  const canSyncCalendar = status === 'ready';
+
+  // null | { state: 'success' | 'empty' | 'error' }
+  const [calendarNotice, setCalendarNotice] = useState(null);
+  const [calendarSyncing, setCalendarSyncing] = useState(false);
+
+  // Always syncs the MAIN profile's schedule (not whichever profile tab is
+  // currently open) — same convention push notifications already use, and
+  // what the auto-resync tick in useClassNotifications keeps updated
+  // afterward, so the two never disagree about which schedule is "the" one
+  // being synced. See src/utils/calendarExport.js for the full design.
+  const handleAddToCalendar = useCallback(async () => {
+    setCalendarSyncing(true);
+    try {
+      const id = getOrCreateCalendarFeedId();
+      if (!id) {
+        setCalendarNotice({ state: 'error' });
+        return;
+      }
+      const { selectedClasses: mainClasses, overrides: mainOverrides } = getMainSchedule();
+      if (mainClasses.length === 0) {
+        setCalendarNotice({ state: 'empty' });
+        return;
+      }
+      const ok = await pushCalendarSchedule(id, { selectedClasses: mainClasses, overrides: mainOverrides });
+      if (!ok) {
+        setCalendarNotice({ state: 'error' });
+        return;
+      }
+      openGoogleCalendarSubscribePrompt(id);
+      setCalendarNotice({ state: 'success', url: getCalendarFeedUrl(id) });
+    } finally {
+      setCalendarSyncing(false);
+    }
+  }, []);
 
   return (
     <div className="app">
@@ -586,6 +628,23 @@ function App() {
                     role="menuitem"
                     className="menu-item"
                     onClick={() => {
+                      setSettingsOpen(false);
+                      handleAddToCalendar();
+                    }}
+                    disabled={!canSyncCalendar || calendarSyncing}
+                  >
+                    <IconCalendar size={16} />
+                    <span>
+                      {calendarSyncing ? 'Syncing…' : 'Sync to Google Calendar'}
+                      <small>No login needed — set up once, stays in sync</small>
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="menu-item"
+                    onClick={() => {
                       setTheme((t) => (t === 'dark' ? 'light' : 'dark'));
                       setSettingsOpen(false);
                     }}
@@ -667,6 +726,52 @@ function App() {
                 <span>Couldn’t refresh just now — showing the last loaded data.</span>
                 <button type="button" className="link-button" onClick={getData}>
                   Retry
+                </button>
+              </div>
+            )}
+
+            {calendarNotice?.state === 'success' && (
+              <div className="alert-bar alert-bar-info no-print" role="status">
+                <IconCalendar size={15} />
+                <span>
+                  A Google Calendar tab should have opened asking you to add your timetable — click{' '}
+                  <strong>Add</strong> there. It&rsquo;ll then stay in sync automatically from now on,
+                  including future changes to your Main profile — no need to press this again. If no tab
+                  opened (a popup blocker can block it),{' '}
+                  <button
+                    type="button"
+                    className="link-button-inline"
+                    onClick={() => navigator.clipboard?.writeText(calendarNotice.url)}
+                  >
+                    copy the calendar link
+                  </button>{' '}
+                  and add it yourself in Google Calendar &rarr; Other calendars &rarr; From URL.
+                </span>
+                <button type="button" className="link-button" onClick={() => setCalendarNotice(null)}>
+                  Got it
+                </button>
+              </div>
+            )}
+
+            {calendarNotice?.state === 'empty' && (
+              <div className="alert-bar no-print" role="status">
+                <IconAlert size={15} />
+                <span>
+                  Your Main profile has no classes selected yet — switch to the Main profile, pick your
+                  classes, then press Calendar again.
+                </span>
+                <button type="button" className="link-button" onClick={() => setCalendarNotice(null)}>
+                  Got it
+                </button>
+              </div>
+            )}
+
+            {calendarNotice?.state === 'error' && (
+              <div className="alert-bar no-print" role="status">
+                <IconAlert size={15} />
+                <span>Couldn&rsquo;t set up calendar sync just now — check your connection and try again.</span>
+                <button type="button" className="link-button" onClick={() => setCalendarNotice(null)}>
+                  Dismiss
                 </button>
               </div>
             )}

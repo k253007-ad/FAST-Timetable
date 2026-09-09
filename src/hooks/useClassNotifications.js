@@ -11,6 +11,7 @@ import {
   markSessionEndedOnServer,
   unsubscribeFromPush,
 } from '../utils/notifications.js';
+import { getCalendarFeedId, pushCalendarSchedule } from '../utils/calendarExport.js';
 
 // A separate app-level "do I actually want notifications" preference, on
 // top of the browser's own OS-level permission — JS can never revoke that
@@ -76,7 +77,7 @@ const getMainActivities = () => {
   }
 };
 
-const getMainSchedule = () => ({
+export const getMainSchedule = () => ({
   selectedClasses: getMainClasses(),
   overrides: getMainOverrides(),
   extraClasses: getMainExtras(),
@@ -143,6 +144,7 @@ export const useClassNotifications = (data) => {
   const startingSoonDiffRef = useRef(new Map()); // session key -> last-seen minutes-to-start
   const lastDayRef = useRef(null);
   const pushSyncedRef = useRef(null); // last schedule JSON already sent to /api/subscribe
+  const calendarSyncedRef = useRef(null); // last schedule JSON already sent to /api/calendar-subscribe
   const pushActiveRef = useRef(false); // true once this device has a real push subscription
   const userEnabledRef = useRef(getUserEnabledPref()); // mirrors userEnabled for the tick loop
 
@@ -282,6 +284,24 @@ export const useClassNotifications = (data) => {
       const mainActivities = getMainActivities();
       const { processedSchedule } = buildSchedule(data, mainClasses, mainOverrides, mainExtras, mainActivities);
 
+      // Keep the "Sync to Google Calendar" live feed current — independent
+      // of notification permission/push entirely, only gated on whether the
+      // student has ever pressed the Calendar button (which is what creates
+      // a calendarFeedId). This is what makes that feature stay in sync
+      // going forward with zero further action: once set up, any later
+      // change to the Main profile's classes/overrides reaches
+      // api/calendar.ics.js automatically, ready for Google's next poll.
+      const calendarFeedId = getCalendarFeedId();
+      if (calendarFeedId) {
+        const calendarSchedule = { selectedClasses: mainClasses, overrides: mainOverrides };
+        const calendarPayload = JSON.stringify(calendarSchedule);
+        if (calendarPayload !== calendarSyncedRef.current) {
+          pushCalendarSchedule(calendarFeedId, calendarSchedule).then((ok) => {
+            if (ok) calendarSyncedRef.current = calendarPayload;
+          });
+        }
+      }
+
       // User muted notifications from inside the app — currentRef still
       // needs updating below for markCurrentEnded/NowNext, but nothing
       // notification-related (push resync or local fallback firing) should
@@ -351,8 +371,15 @@ export const useClassNotifications = (data) => {
           room: item.isActivity ? '' : cleanRoom(item.Room),
           endLabel: currentCell.endLabel,
           minutesLeft: Math.max(0, currentCell.endMin - nowMinutes),
+          isActivity: Boolean(item.isActivity),
         };
       }
+
+      // A personal activity occupying "now" shouldn't delay reminders about
+      // the next REAL class the way another actual class would — see the
+      // identical `currentBlocksNext` in api/_lib/notifyLogic.js, kept in
+      // sync by hand.
+      const currentBlocksNext = Boolean(currentInfo && !currentInfo.isActivity);
 
       let nextInfo = null;
       if (nextCell) {
@@ -419,8 +446,9 @@ export const useClassNotifications = (data) => {
 
       // 30 / 10 / 5 minutes until the next class starts (covers both a gap
       // after the current class ended and simply not having started a first
-      // class yet today).
-      if (!currentInfo && nextInfo) {
+      // class yet today) — also tracked while an activity is the current
+      // session, not just when nothing is (see currentBlocksNext above).
+      if (!currentBlocksNext && nextInfo) {
         const prevDiff = startingSoonDiffRef.current.get(nextInfo.key);
         startingSoonDiffRef.current.set(nextInfo.key, nextInfo.minutesLeft);
         if (prevDiff !== undefined) {

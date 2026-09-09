@@ -288,6 +288,21 @@ sheet — see above.
   (Course, Section, Day, Time) (same section split across two rooms for capacity) — treating
   each raw row as its own run-position produces duplicate-identity occurrences (hit as a real
   React key-collision bug 2026-08-31).
+- **`buildSchedule` must de-dupe a cell's classes by Course+Section before clash detection/
+  rendering** (`dedupeByCourseSection`, `schedule.js`, fixed 2026-09-07) — the same capacity-
+  split phenomenon described just above (one raw sheet row per room, identical Course+Section+
+  Day+Time) was making a student's own single class render as two boxes and count as a clash
+  against *itself*, since `cellClasses.length > 1` was checked against the raw, undeduplicated
+  row list. Fixed by collapsing to one representative row per distinct Course+Section right
+  before the clash check and before the cell is pushed into `processedSchedule` — this fixes
+  the grid, NowNext, notifications, and the calendar-feed export all at once, since they all
+  read `processedSchedule`. **Two truly different sections of the same course at the same
+  time still correctly count as a real clash** (Section differs, so the dedupe key differs) —
+  verified directly with a synthetic two-row test (identical Course+Section+Day+Time, different
+  Room/Instructor → collapses to 1 box, 0 clashes; a real Course+different-Section clash on a
+  separate day → stays 2 boxes, 1 clash). `sessionCount`/`courseCount` were deliberately left
+  reading the raw (undeduplicated) row list — out of scope for this fix, flagged not silently
+  changed.
 - **localStorage compat**: key `selectedClasses` stores legacy `"Course - Section"` strings.
   Existing users have saved data in this format. Split on the **last** `" - "`;
   section `"N/A"` means "no section". Never change the stored format.

@@ -13,6 +13,8 @@ Object.assign(process.env, loadEnv('development', process.cwd(), ''))
 const { getSheetData } = await import('./api/sheetConfig.js')
 const { default: subscribeHandler } = await import('./api/subscribe.js')
 const { default: notifyTickHandler } = await import('./api/notify-tick.js')
+const { default: calendarSubscribeHandler } = await import('./api/calendar-subscribe.js')
+const { default: calendarIcsHandler } = await import('./api/calendar.ics.js')
 
 // Serves the same JSON as api/data.js so `npm run dev` doesn't need `vercel dev`.
 const apiDataMiddleware = () => ({
@@ -81,7 +83,17 @@ const apiPushMiddleware = () => ({
   }
 })
 
+// "Sync to Google Calendar" endpoints (added 2026-09-07) — see
+// fastTimetable/CLAUDE.md's Add to Calendar section.
+const apiCalendarMiddleware = () => ({
+  name: 'api-calendar-middleware',
+  configureServer(server) {
+    server.middlewares.use('/api/calendar-subscribe', withVercelCompat(calendarSubscribeHandler))
+    server.middlewares.use('/api/calendar.ics', withVercelCompat(calendarIcsHandler))
+  }
+})
+
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [react(), apiDataMiddleware(), apiPushMiddleware()],
+  plugins: [react(), apiDataMiddleware(), apiPushMiddleware(), apiCalendarMiddleware()],
 })
