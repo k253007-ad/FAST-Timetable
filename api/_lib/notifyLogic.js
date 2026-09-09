@@ -59,6 +59,7 @@ const sessionInfo = (cell) => {
     endLabel: cell.endLabel,
     startMin: cell.startMin,
     endMin: cell.endMin,
+    isActivity: Boolean(item.isActivity),
   };
 };
 
@@ -112,6 +113,15 @@ export const computeNotifications = (data, subscriberSelection, prevState, now) 
   }
   const currentInfo = rawCurrentInfo && state.manualEndedKey === rawCurrentInfo.key ? null : rawCurrentInfo;
 
+  // A personal activity (Library, Prayer/Namaz, ...) occupying "now" should
+  // NOT delay reminders about the next real class the way another actual
+  // class would — a student sitting in the library before their next
+  // lecture still wants the 30/10/5-minute countdown in real time, not all
+  // at once (or missed entirely) the moment the activity happens to end.
+  // Only a real, currently-ongoing class should gate the "next class
+  // starting soon" tracking below.
+  const currentBlocksNext = Boolean(currentInfo && !currentInfo.isActivity);
+
   const notifications = [];
 
   // Class just started.
@@ -157,8 +167,10 @@ export const computeNotifications = (data, subscriberSelection, prevState, now) 
   }
 
   // 30/10/5 minutes until the next class starts (a gap after one ended, or
-  // simply not having started a first class yet today).
-  if (!currentInfo && nextInfo) {
+  // simply not having started a first class yet today) — tracked whenever
+  // nothing REAL is currently blocking it, i.e. also while an activity is
+  // ongoing (see currentBlocksNext above).
+  if (!currentBlocksNext && nextInfo) {
     const prevDiff = state.startingSoonDiff[nextInfo.key];
     state.startingSoonDiff[nextInfo.key] = nextInfo.minutesLeft;
     if (prevDiff !== undefined) {
