@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef } from 'react';
-import { splitClassValue, withAlpha } from '../utils/courseColors.js';
+import { splitClassValue, withAlpha, getActivityColor } from '../utils/courseColors.js';
 import { buildSchedule, cleanRoom, formatSlot } from '../utils/schedule.js';
 import { IconAlert, IconCalendar } from './Icons.jsx';
 
@@ -14,18 +14,6 @@ import { IconAlert, IconCalendar } from './Icons.jsx';
 // media query in index.css, so this runs unconditionally — it's a harmless
 // no-op on mobile, which keeps its fixed size and clamp there.
 const TIER_CLASSES = ['class-course--tier2', 'class-course--tier3'];
-
-// Fixed per-type colours for personal activities (ACTIVITY_TYPES in
-// schedule.js) — deliberately not derived from courseColors, which only
-// knows about real "Course - Section" selections.
-const ACTIVITY_COLORS = {
-  Library: '#0891b2',
-  Cafe: '#d97706',
-  Spot: '#65a30d',
-  Canteen: '#dc2626',
-  'Prayer/Namaz': '#7c3aed',
-  'Touch Grass': '#16a34a',
-};
 
 const fitCourseLabels = (container) => {
   if (!container) return;
@@ -235,7 +223,7 @@ const TimetableGrid = ({
   // activity types) and a dotted outline, a third visual style distinct
   // from both a real course (solid left-accent) and an extra (dashed).
   const activityStyle = (type) => {
-    const color = ACTIVITY_COLORS[type] || '#64748b';
+    const color = getActivityColor(type);
     return {
       backgroundColor: withAlpha(color, isDark ? 0.14 : 0.08),
       border: `1.5px dotted ${color}`,

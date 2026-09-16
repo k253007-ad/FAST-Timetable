@@ -111,20 +111,26 @@ const fetchSheet = async (sheetUrl, sheetInfo) => {
 const ROLL_ENTRY_PATTERN = /^(.+?)\s*\(([^)]+)\)$/;
 
 /**
- * Fetches the compact roll-number sheet: one row per student — column A the
- * roll number, every other column in that row one "SHORTCODE (Section)"
- * cell for a course they take (row 0 is a header, skipped; trailing blank
- * cells are fine since students take different numbers of courses). Codes
- * are resolved against `codeMap` (buildCourseCodeMap, derived from the
- * master sheet's own course names) back to the exact course string
- * buildSchedule matches on. A code the map doesn't recognize is dropped
- * with a console warning rather than injected as a broken entry — most
- * likely a typo in the sheet or the master sheet's course list changed
- * since the code was written down.
+ * Parses the compact roll-number sheet's response: one row per student —
+ * column A the roll number, every other column in that row one "SHORTCODE
+ * (Section)" cell for a course they take (row 0 is a header, skipped;
+ * trailing blank cells are fine since students take different numbers of
+ * courses). Codes are resolved against `codeMap` (buildCourseCodeMap,
+ * derived from the master sheet's own course names) back to the exact
+ * course string buildSchedule matches on. A code the map doesn't recognize
+ * is dropped with a console warning rather than injected as a broken
+ * entry — most likely a typo in the sheet or the master sheet's course
+ * list changed since the code was written down.
+ *
+ * Takes an already-in-flight `fetch()` Promise, not a URL — the caller
+ * kicks the request off as early as possible (alongside the day-tab
+ * fetches, which this doesn't depend on) and only awaits it once it
+ * actually needs the parsed result, so the network round trip isn't
+ * serialized onto the critical path behind unrelated work.
  */
-const fetchRollNumbers = async (url, codeMap) => {
+const parseRollNumbers = async (responsePromise, codeMap) => {
   try {
-    const response = await fetch(url);
+    const response = await responsePromise;
     if (!response.ok) {
       console.error('Failed to fetch roll-number sheet', response.statusText);
       return [];
@@ -184,6 +190,26 @@ export const buildTimetableFromMeta = async (metaJson) => {
   const sheetUrl = metaJson.karachi.url;
   const sheetGids = metaJson.karachi.codes;
 
+  // The roll-number sheet fetch used to be `await`ed AFTER this Promise.all
+  // resolved — a fully needless extra network round trip serialized onto
+  // the critical path, since it doesn't depend on the day-tab results at
+  // all (buildCourseCodeMap needs the day-tab COURSE NAMES, which arrive
+  // fully formed with each fetchSheet result — the roll-number fetch itself
+  // is independent, only the *parsing* of its response needs the code map,
+  // which is built after Promise.all as before). Kicking it off alongside
+  // the 5 day-tab fetches (2026-09-14, part of a PWA-open-speed
+  // investigation) means it happens for free within the same round trip
+  // instead of adding one after.
+  const rollNumbersUrl = metaJson.karachi.rollNumbers?.url;
+  const rollNumbersPromise = rollNumbersUrl ? fetch(rollNumbersUrl) : null;
+  // A no-op handler attached immediately, purely so a fetch failure landing
+  // before this promise is actually awaited below doesn't get reported as
+  // an unhandled promise rejection in the console — parseRollNumbers still
+  // receives (and really handles, via its own try/catch) this exact same
+  // promise separately; attaching more than one handler to one promise is
+  // fine, both fire independently.
+  rollNumbersPromise?.catch(() => {});
+
   const results = await Promise.all(sheetGids.map((info) => fetchSheet(sheetUrl, info)));
 
   const allTimeSlots = new Set();
@@ -214,8 +240,8 @@ export const buildTimetableFromMeta = async (metaJson) => {
   }
 
   const courseCodeMap = buildCourseCodeMap(allTimetableData);
-  const rollNumberEntries = metaJson.karachi.rollNumbers
-    ? await fetchRollNumbers(metaJson.karachi.rollNumbers.url, courseCodeMap)
+  const rollNumberEntries = rollNumbersPromise
+    ? await parseRollNumbers(rollNumbersPromise, courseCodeMap)
     : [];
 
   return {

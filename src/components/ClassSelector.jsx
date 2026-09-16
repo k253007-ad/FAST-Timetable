@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { splitClassValue, formatClassLabel } from '../utils/courseColors.js';
+import { splitClassValue, formatClassLabel, getActivityColor, withAlpha } from '../utils/courseColors.js';
 import {
   ACTIVITY_TYPES,
   buildMoveOverrides,
@@ -14,7 +14,7 @@ import {
   locateRoom,
   resolveRoomSelection,
 } from '../utils/schedule.js';
-import { IconAlert, IconChevronDown, IconPin, IconSearch, IconX } from './Icons.jsx';
+import { IconChevronDown, IconPin, IconSearch, IconX } from './Icons.jsx';
 
 // Custom activity names a student has typed in "Manage activities" — saved
 // so they show up in the type dropdown from then on instead of needing to be
@@ -23,6 +23,16 @@ import { IconAlert, IconChevronDown, IconPin, IconSearch, IconX } from './Icons.
 // any one profile's schedule, so it's read/written directly here rather than
 // threaded through App.jsx's per-profile storage like `activities` itself.
 const CUSTOM_ACTIVITY_KEY = 'customActivityTypes';
+
+// Roll No search "ghost" fill (2026-09-10, on request) — the currently
+// enrolled intake years, hardcoded rather than derived from the live sheet
+// on purpose: the sheet can still carry older/graduated intakes (e.g. a
+// stray "20K-...") that shouldn't be offered as a searchable roll number
+// any more, so this is a deliberate allowlist, not "whatever prefixes
+// happen to appear in the data today." Update this list when a new intake
+// year starts (or an old one should stop being offered).
+const ROLL_NO_PREFIXES = ['21K', '22K', '23K', '24K', '25K', '26K'];
+const ROLL_NO_MAX = 9999;
 
 const getSavedCustomActivityNames = () => {
   try {
@@ -173,6 +183,96 @@ const CourseDropdown = ({ options, value, onChange }) => {
   );
 };
 
+// "Manage activities"' Type field — built on the same DropdownShell as
+// CourseDropdown above, rather than a native <select>, specifically so a
+// saved custom name's own row can carry an inline .chip-remove X (2026-09-09,
+// on request: "there should be cross right of custom activities" — replaces
+// the earlier separate "Remove from list" text link, which only ever acted
+// on whichever custom name happened to be currently selected). Built-in
+// types and "Custom…" are plain select-and-close buttons, same as
+// CourseDropdown's rows; a saved custom name's row can't itself be a
+// <button> (it nests the remove button — a <button> can't contain another
+// <button>, same reasoning as the assigned-activity-slot row below), so it's
+// a click/keyboard-activatable <div> instead, with the X calling
+// `stopPropagation` so removing a name never also selects it.
+const ActivityTypeDropdown = ({ builtIns, customTypes, activityType, isCustomActivity, onSelect, onSelectCustom, onRemoveCustom }) => {
+  const [open, setOpen] = useState(false);
+  const label = isCustomActivity ? 'Custom…' : activityType;
+  const isChecked = (t) => !isCustomActivity && activityType === t;
+
+  return (
+    <DropdownShell
+      label={label}
+      open={open}
+      onToggle={() => setOpen((v) => !v)}
+      onClose={() => setOpen(false)}
+      ariaLabel="Activity type"
+    >
+      {builtIns.map((t) => (
+        <button
+          key={t}
+          type="button"
+          className={`option-row option-row-sync${isChecked(t) ? ' is-checked' : ''}`}
+          onClick={() => {
+            onSelect(t);
+            setOpen(false);
+          }}
+        >
+          <span className="option-text">
+            <span className="option-course">{t}</span>
+          </span>
+        </button>
+      ))}
+      {customTypes.map((t) => (
+        <div
+          key={t}
+          className={`option-row option-row-sync${isChecked(t) ? ' is-checked' : ''}`}
+          role="button"
+          tabIndex={0}
+          onClick={() => {
+            onSelect(t);
+            setOpen(false);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              onSelect(t);
+              setOpen(false);
+            }
+          }}
+        >
+          <span className="option-text">
+            <span className="option-course">{t}</span>
+          </span>
+          <button
+            type="button"
+            className="chip-remove"
+            aria-label={`Remove "${t}" from the activity dropdown`}
+            onClick={(e) => {
+              e.stopPropagation();
+              onRemoveCustom(t);
+            }}
+          >
+            <IconX size={16} />
+          </button>
+        </div>
+      ))}
+      <button
+        type="button"
+        className={`option-row option-row-sync${isCustomActivity ? ' is-checked' : ''}`}
+        onClick={() => {
+          onSelectCustom();
+          setOpen(false);
+        }}
+      >
+        <span className="option-text">
+          <span className="option-course">Custom…</span>
+        </span>
+      </button>
+    </DropdownShell>
+  );
+};
+
 // The 4 "My classes" sections (Selected courses / Adjust class times / Add
 // extra class / Manage activities) each open their content as a modal
 // dialog rather than expanding inline (2026-09-07, on request) — this is
@@ -262,12 +362,25 @@ GroupOptionRow.displayName = 'GroupOptionRow';
 // rather than toggling its classes in/out of an independent selection. See
 // the "keep synced" doc comment below for why there's no separate
 // select-vs-sync distinction any more.
-const SyncOptionRow = memo(({ name, count, active, onSelect }) => (
-  <button type="button" value={name} className={`option-row option-row-sync${active ? ' is-checked' : ''}`} onClick={onSelect}>
+//
+// `isGhost` (2026-09-10, Roll No only, see ROLL_NO_PREFIXES above): a
+// roll number in the allowed intake range that has no real course data.
+// A real, clickable row exactly like any other (on request: "make the roll
+// display same as other, only no data found should be different") —
+// clicking one syncs like any other pick (see `handleSyncSelect`) and also
+// surfaces the "no data" message, nudging the student to search courses
+// manually instead. The class-count text is the only visual difference.
+const SyncOptionRow = memo(({ name, count, active, isGhost, onSelect }) => (
+  <button
+    type="button"
+    value={name}
+    className={`option-row option-row-sync${active ? ' is-checked' : ''}`}
+    onClick={onSelect}
+  >
     <span className="option-text">
       <span className="option-course">{name}</span>
       <span className="option-section">
-        {count} class{count === 1 ? '' : 'es'}
+        {isGhost ? 'No data found' : `${count} class${count === 1 ? '' : 'es'}`}
       </span>
     </span>
     {active && (
@@ -514,22 +627,28 @@ const RescheduleEditScreen = ({ occurrence, timeSlots, activeOverride, roomOptio
  * shown as removable chips. Stored values keep the legacy
  * "Course - Section" format so existing saved selections keep working.
  *
- * Four selection modes (replaced the old Manual/Auto 2-tab layout on
- * 2026-08-25 — "Auto" used to nest Student-section/Teacher under one tab;
- * Section was dropped entirely at first in favor of the more precise Roll No
- * pick, then added back as its own tab on 2026-08-26 since some students
- * just want "everything BCS-3A takes" rather than one specific student):
+ * Three group-selection modes, plus a separate "Search courses" popup for
+ * individual picks (replaced the old Manual/Auto 2-tab layout on 2026-08-25
+ * — "Auto" used to nest Student-section/Teacher under one tab; Section was
+ * dropped entirely at first in favor of the more precise Roll No pick, then
+ * added back as its own tab on 2026-08-26 since some students just want
+ * "everything BCS-3A takes" rather than one specific student):
  *  - Roll No: pick a specific student's roll number (e.g. "3068") — see
  *    "Keep synced" below, this is no longer a plain group toggle.
- *  - Course (labelled "Manual" internally — `mode` stays `'manual'`, only the
- *    tab's visible text changed 2026-08-30): pick individual course sections
- *    one at a time (original flow, unaffected by "keep synced").
  *  - Section: pick a section/cohort code (e.g. "BCS-3A") — same "keep
  *    synced" behavior as Roll No.
  *  - Teacher: pick a teacher name and every class they teach is added/
  *    removed as a group — built from `data.timetable`, the one group mode
  *    that stayed a plain toggle (never in scope for "keep synced"). (Tab
- *    order: Roll No, Course, Section, Teacher.)
+ *    order: Roll No, Section, Teacher.)
+ *  - **Course search (2026-09-10, moved out of the mode-tabs entirely,
+ *    on request)** — used to be a 4th tab ("Course", `mode` internally still
+ *    `'manual'` from its original "Manual" name) with an always-inline
+ *    search box; it's now its own popup (`showCourseSearch`), reachable
+ *    only via the "Add courses" button inside the "Selected courses" modal
+ *    (`openCourseSearch`) — picking individual course sections one at a
+ *    time, unaffected by "keep synced" except that opening this popup
+ *    cancels an active sync (see `openCourseSearch`'s own comment).
  *
  * **"Keep synced" (added 2026-09-01, redesigned same day to full-replace
  * semantics)**: Roll No and Section are no longer independent multi-select
@@ -579,12 +698,23 @@ const ClassSelector = ({
   linkedSync,
   setLinkedSync,
 }) => {
-  const [mode, setMode] = useState('rollno'); // 'manual' | 'rollno' | 'teacher' | 'section'
+  const [mode, setMode] = useState('rollno'); // 'rollno' | 'teacher' | 'section' — see the doc comment above re: 'manual'
   const [query, setQuery] = useState('');
   const [groupQuery, setGroupQuery] = useState(''); // shared search box for roll no / teacher / section tabs
+  // "One-time" (2026-09-10): shown once when a ghost roll number is picked,
+  // cleared on the next search/mode change/successful sync rather than
+  // persisting indefinitely — see `handleSyncSelect`/`switchMode`.
+  const [noDataMessage, setNoDataMessage] = useState('');
   const [open, setOpen] = useState(false);
   const [minimized, setMinimized] = useState(false);
   const [showChips, setShowChips] = useState(false);
+  // "Search courses" popup (2026-09-10, on request: "remove the search
+  // course from the options and make it popup, which can be accessed from
+  // the button in selected courses") — Course used to be a 4th mode tab
+  // alongside Roll No/Section/Teacher with its own always-inline search box;
+  // it's now reachable only via "Add courses" inside the "Selected courses"
+  // modal (openCourseSearch below), never from the mode-tabs row.
+  const [showCourseSearch, setShowCourseSearch] = useState(false);
   const [showReschedule, setShowReschedule] = useState(false);
   // A 3-step wizard inside the "Adjust class times" modal (2026-09-07):
   // `rescheduleDay === null` shows only the 5 day buttons; picking a day
@@ -617,9 +747,13 @@ const ClassSelector = ({
 
   useDismissOnOutside(showSyncInfo, () => setShowSyncInfo(false), syncBadgeRef);
 
-  // Close on outside click / Escape while the dropdown is open. "Outside"
-  // means outside the search box + its panel — not just outside the whole
-  // card — so clicking elsewhere in "My classes" (title, tabs, chips) closes it too.
+  // Close on outside click / Escape while the group (Roll No/Section/
+  // Teacher) dropdown is open. "Outside" means outside the search box +
+  // its panel — not just outside the whole card — so clicking elsewhere in
+  // "My classes" (title, tabs, chips) closes it too. `mode` is always one
+  // of those three whenever `open` applies here — the Course search box
+  // moved into its own modal (2026-09-10, see `showCourseSearch` above)
+  // with no open/closed panel state of its own to manage.
   useEffect(() => {
     if (!open) return;
 
@@ -630,7 +764,7 @@ const ClassSelector = ({
       if (e.key === 'Escape') {
         // Refocus first: the input's onFocus sets open=true, and the
         // close below must win when React batches the two updates.
-        (mode === 'manual' ? inputRef : groupInputRef).current?.focus();
+        groupInputRef.current?.focus();
         setOpen(false);
       }
     };
@@ -641,7 +775,7 @@ const ClassSelector = ({
       document.removeEventListener('pointerdown', onPointerDown);
       document.removeEventListener('keydown', onKeyDown);
     };
-  }, [open, mode]);
+  }, [open]);
 
   // Every whitespace-separated token must match, so "cs4048 6b" works.
   const filtered = useMemo(() => {
@@ -898,12 +1032,48 @@ const ClassSelector = ({
     };
   }, [data]);
 
+  // Ghost-fills Roll No mode's list (2026-09-10, on request) — every roll
+  // number in the allowed intake range (ROLL_NO_PREFIXES x 0001-9999) is a
+  // real, listed row: a roll number with real data uses its real entry, one
+  // without becomes a `{ classes: [], isGhost: true }` placeholder so
+  // searching a specific roll number always surfaces *something* ("No data
+  // found") instead of a bare "no roll numbers match" — the student can
+  // tell "this number doesn't exist for me" apart from "the search itself
+  // is broken." Built by walking the allowed range in order (rather than
+  // generating ghosts separately and sorting the combined list afterward),
+  // so the result comes out already sorted by roll number for free.
+  // Computed once per `rollNoGroups`/`mode` — deliberately NOT re-derived
+  // per keystroke (`groups` below decides *whether* to use it, so typing
+  // never regenerates this ~60,000-row array, only re-filters over
+  // whichever of it/the real list is already sitting in memory).
+  const rollNoUniverse = useMemo(() => {
+    if (mode !== 'rollno') return rollNoGroups;
+    const realByName = new Map(rollNoGroups.map((g) => [g.name, g]));
+    const combined = [];
+    for (const prefix of ROLL_NO_PREFIXES) {
+      for (let n = 1; n <= ROLL_NO_MAX; n++) {
+        const name = `${prefix}-${String(n).padStart(4, '0')}`;
+        combined.push(realByName.get(name) || { name, classes: [], isGhost: true });
+      }
+    }
+    return combined;
+  }, [rollNoGroups, mode]);
+
+  // Real roll numbers only until the student's typed at least 2 characters
+  // (2026-09-10, on request: "show only roll no with available classes
+  // first, when user types 2 or more characters then show the ghost
+  // ones") — an untyped/1-character query would match thousands of ghosts
+  // at once (not useful, and the default un-searched view should lead with
+  // what actually exists), so ghosts only enter the pool once the query is
+  // specific enough to be worth padding out with "doesn't exist" rows.
   const groups = useMemo(() => {
-    if (mode === 'rollno') return rollNoGroups;
+    if (mode === 'rollno') {
+      return groupQuery.trim().length >= 2 ? rollNoUniverse : rollNoGroups;
+    }
     if (mode === 'teacher') return instructorGroups;
     if (mode === 'section') return sectionGroups;
     return [];
-  }, [mode, rollNoGroups, instructorGroups, sectionGroups]);
+  }, [mode, rollNoUniverse, rollNoGroups, instructorGroups, sectionGroups, groupQuery]);
 
   const filteredGroups = useMemo(() => {
     const tokens = groupQuery.toLowerCase().split(/\s+/).filter(Boolean);
@@ -938,22 +1108,73 @@ const ClassSelector = ({
   // group's live classes (see the "Keep synced" doc comment above). `mode`
   // is either 'rollno' or 'section' at every call site this is wired to, so
   // it doubles directly as `linkedSync.type`.
+  //
+  // A ghost roll number (2026-09-10, see `rollNoUniverse` above) still
+  // syncs like any other pick (on request: "when clicked on ghost ones it
+  // should sync") — `getClassesForRollNo` returning `[]` for a roll number
+  // that genuinely has no data is already a valid, handled state (see the
+  // "Keep synced" doc comment in App.jsx). It additionally surfaces a
+  // one-time message nudging the student toward manually searching courses
+  // (the "Search courses" popup) instead, since syncing them to an empty
+  // selection with no explanation would look like the app just did nothing.
+  // Checked against `rollNoGroups` (the real-only set), not `rollNoUniverse`
+  // (which also holds every ghost) — cheaper membership test, same result.
+  const realRollNoNames = useMemo(() => new Set(rollNoGroups.map((g) => g.name)), [rollNoGroups]);
+
   const handleSyncSelect = useCallback(
     (e) => {
-      setLinkedSync({ type: mode, value: e.currentTarget.value });
+      const value = e.currentTarget.value;
+      setNoDataMessage(
+        mode === 'rollno' && !realRollNoNames.has(value)
+          ? 'Your Courses data is not Present, Please Select Your Courses'
+          : ''
+      );
+      setLinkedSync({ type: mode, value });
     },
-    [mode, setLinkedSync]
+    [mode, realRollNoNames, setLinkedSync]
   );
 
   const switchMode = (nextMode) => {
     setMode(nextMode);
     setGroupQuery('');
+    setNoDataMessage('');
     setOpen(false);
   };
 
   const toggleMinimized = () => {
     setOpen(false);
     setMinimized((v) => !v);
+  };
+
+  // "Add courses" (2026-09-10, on request: a button in "Selected courses"
+  // that "goes to search courses popup") — opens the "Search courses"
+  // modal (`showCourseSearch`; Course is no longer a mode tab at all as of
+  // the same day's follow-up request — see that state's own doc comment).
+  // **Does NOT cancel an active "keep synced" link** (reversed same day,
+  // on request: "Add courses should not De-Sync the roll-no... added
+  // courses should be synced to roll no and removed courses should be
+  // removed") — an earlier version cancelled sync here, back when syncing
+  // meant a destructive full-replace on every resolve that would've
+  // silently wiped out anything manually added. Now that App.jsx's "Keep
+  // synced" effect only applies the *diff* of what the university's data
+  // actually changed (not a full replace) on every subsequent resolve, a
+  // manually added or removed course while synced survives future
+  // resyncs — see that effect's own doc comment for the full design.
+  // Focusing the input has to wait for the *next* render — the modal (and
+  // its input) doesn't exist in the DOM yet at the moment this handler
+  // runs — so a token bump drives a dedicated effect instead of calling
+  // `.focus()` inline.
+  const [focusSearchToken, setFocusSearchToken] = useState(0);
+  useEffect(() => {
+    if (focusSearchToken === 0) return;
+    inputRef.current?.focus();
+  }, [focusSearchToken]);
+
+  const openCourseSearch = () => {
+    setShowChips(false);
+    setQuery('');
+    setShowCourseSearch(true);
+    setFocusSearchToken((t) => t + 1);
   };
 
   // "main" is a fixed extra slot before the numbered ones — it's the user's
@@ -976,15 +1197,6 @@ const ClassSelector = ({
 
   return (
     <>
-      <div className="data-disclaimer no-print" role="note">
-        <IconAlert size={15} />
-        <span>
-          This is an unofficial tool maintained independently by a student. Since
-          data is updated manually, please cross-verify your schedule with official
-          university announcements.
-        </span>
-      </div>
-
       <section className="card selector-card no-print">
       <div className="selector-head">
         <h2 className="selector-title">My classes</h2>
@@ -1061,8 +1273,22 @@ const ClassSelector = ({
               </div>
             )}
           </div>
-        ) : (
-          !minimized && (
+        ) : null}
+
+        {/* Rendered unconditionally (not nested inside the `!linkedSync`
+            branch below) — picking a ghost roll number now syncs (see
+            handleSyncSelect above), which immediately swaps the search box
+            out for the green sync indicator above; a message living inside
+            that now-unmounted search box would vanish the instant it
+            appeared, so it has to sit outside both branches to survive the
+            sync happening in the same click. */}
+        {noDataMessage && (
+          <p className="reschedule-error" role="alert">
+            {noDataMessage}
+          </p>
+        )}
+
+        {!linkedSync && !minimized && (
             <div className="mode-tabs" role="tablist" aria-label="Selection mode">
               <button
                 type="button"
@@ -1072,15 +1298,6 @@ const ClassSelector = ({
                 onClick={() => switchMode('rollno')}
               >
                 Roll No
-              </button>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={mode === 'manual'}
-                className={`mode-tab${mode === 'manual' ? ' is-active' : ''}`}
-                onClick={() => switchMode('manual')}
-              >
-                Course
               </button>
               <button
                 type="button"
@@ -1101,50 +1318,45 @@ const ClassSelector = ({
                 Teacher
               </button>
             </div>
-          )
         )}
       </div>
 
-      {!minimized && !linkedSync && mode === 'manual' && (
-        <div className="combobox" ref={comboboxRef}>
-          <input
-            ref={inputRef}
-            type="search"
-            enterKeyHint="search"
-            className="combobox-input"
-            placeholder={hasData ? 'Search course name' : 'No courses available'}
-            value={query}
-            disabled={!hasData}
-            onChange={(e) => {
-              setQuery(e.target.value);
-              setOpen(true);
-            }}
-            onFocus={() => setOpen(true)}
-            onClick={() => setOpen(true)}
-            onKeyDown={(e) => {
-              // The mobile keyboard's "Search" action key (from
-              // enterKeyHint="search" below) sends Enter — dismiss the
-              // keyboard while leaving the results panel open (blur doesn't
-              // trigger the outside-pointerdown listener that closes it).
-              if (e.key === 'Enter') e.target.blur();
-            }}
-            role="combobox"
-            aria-expanded={open}
-            aria-controls={panelId}
-            aria-label="Search courses"
-            autoComplete="off"
-            spellCheck="false"
-          />
-          <SearchAction
-            query={query}
-            onClear={() => {
-              setQuery('');
-              inputRef.current?.focus();
-            }}
-          />
+      {showCourseSearch && (
+        <Modal title="Search courses" onClose={() => setShowCourseSearch(false)}>
+          <div className="combobox">
+            <input
+              ref={inputRef}
+              type="search"
+              enterKeyHint="search"
+              className="combobox-input"
+              placeholder={hasData ? 'Search course name' : 'No courses available'}
+              value={query}
+              disabled={!hasData}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => {
+                // The mobile keyboard's "Search" action key (from
+                // enterKeyHint="search" below) sends Enter — dismiss the
+                // keyboard, the results list stays visible regardless
+                // (it's always shown inside this modal, no open/closed
+                // state to lose).
+                if (e.key === 'Enter') e.target.blur();
+              }}
+              aria-controls={panelId}
+              aria-label="Search courses"
+              autoComplete="off"
+              spellCheck="false"
+            />
+            <SearchAction
+              query={query}
+              onClear={() => {
+                setQuery('');
+                inputRef.current?.focus();
+              }}
+            />
+          </div>
 
-          {open && hasData && (
-            <div className="combobox-panel" id={panelId} role="group" aria-label="Matching courses">
+          {hasData && (
+            <div id={panelId} role="group" aria-label="Matching courses">
               <div className="combobox-meta">
                 {filtered.length > MAX_VISIBLE_RESULTS
                   ? `Showing ${MAX_VISIBLE_RESULTS} of ${filtered.length} — keep typing to narrow`
@@ -1168,7 +1380,7 @@ const ClassSelector = ({
               </div>
             </div>
           )}
-        </div>
+        </Modal>
       )}
 
       {!minimized && !linkedSync && mode === 'rollno' && !hasRollData && (
@@ -1193,6 +1405,7 @@ const ClassSelector = ({
             disabled={!hasData}
             onChange={(e) => {
               setGroupQuery(e.target.value);
+              setNoDataMessage('');
               setOpen(true);
             }}
             onFocus={() => setOpen(true)}
@@ -1250,6 +1463,7 @@ const ClassSelector = ({
                         name={group.name}
                         count={group.classes.length}
                         active={linkedSync?.type === mode && linkedSync.value === group.name}
+                        isGhost={group.isGhost}
                         onSelect={handleSyncSelect}
                       />
                     )
@@ -1268,7 +1482,7 @@ const ClassSelector = ({
       {!minimized && (
         <div className="section-btn-row">
           <button type="button" className="section-btn" onClick={() => setShowChips(true)}>
-            <span>Selected courses</span>
+            <span>Select courses</span>
             {selectedClasses.length > 0 && <span className="section-btn-count">{selectedClasses.length}</span>}
           </button>
 
@@ -1301,7 +1515,10 @@ const ClassSelector = ({
       )}
 
       {showChips && (
-        <Modal title="Selected courses" onClose={() => setShowChips(false)}>
+        <Modal title="Select courses" onClose={() => setShowChips(false)}>
+          <button type="button" className="action-btn-blue selector-add-courses-btn" onClick={openCourseSearch}>
+            Add courses
+          </button>
           {selectedClasses.length > 0 ? (
             <ul className="chip-row" aria-label="Selected sections">
               {selectedClasses.map((value) => {
@@ -1397,9 +1614,28 @@ const ClassSelector = ({
             );
           }
 
-          // Step 1: only the 5 day buttons — nothing else on screen.
+          // Step 1: only the 5 day buttons — nothing else on screen, except
+          // a top "Reset all" when there's something to reset (2026-09-10,
+          // on request) — clears every override across every day at once,
+          // same `.selector-head` count-pill + `.link-button` pattern as
+          // "Manage activities"' own "Remove all". Lives here rather than
+          // per-day (step 2) since an override can be on any day and this
+          // is the one screen that's day-agnostic.
           return (
             <Modal title="Adjust class times" onClose={closeReschedule}>
+              {overrides.length > 0 && (
+                <div className="selector-head">
+                  <span className="count-pill">{overrides.length} adjusted</span>
+                  <button
+                    type="button"
+                    className="link-button"
+                    onClick={() => setOverrides([])}
+                    aria-label="Reset all adjusted class times"
+                  >
+                    Reset all
+                  </button>
+                </div>
+              )}
               {/* Top-to-bottom, not the Today view's horizontal row
                   (2026-09-07) — .day-picker-vertical is additive so the
                   shared .day-picker/.day-tab classes stay unchanged for
@@ -1510,49 +1746,37 @@ const ClassSelector = ({
 
       {showActivities && (
         <Modal title="Manage activities" onClose={() => setShowActivities(false)}>
+          {activities.length > 0 && (
+            <div className="selector-head">
+              <span className="count-pill">{activities.length} activities</span>
+              <button
+                type="button"
+                className="link-button"
+                onClick={() => setActivities([])}
+                aria-label="Remove all activities"
+              >
+                Remove all
+              </button>
+            </div>
+          )}
           {activityError && (
             <p className="reschedule-error" role="alert">
               {activityError}
             </p>
           )}
           <div className="reschedule-edit-panel">
-            <div className="reschedule-field-row">
-              <select
-                className="reschedule-select"
-                value={isCustomActivity ? '__custom__' : activityType}
-                onChange={(e) => {
-                  if (e.target.value === '__custom__') {
-                    setIsCustomActivity(true);
-                  } else {
-                    setIsCustomActivity(false);
-                    setActivityType(e.target.value);
-                  }
-                }}
-                aria-label="Activity type"
-              >
-                {ACTIVITY_TYPES.map((t) => (
-                  <option key={t} value={t}>
-                    {t}
-                  </option>
-                ))}
-                {customActivityNames.map((t) => (
-                  <option key={t} value={t}>
-                    {t}
-                  </option>
-                ))}
-                <option value="__custom__">Custom…</option>
-              </select>
-              {!isCustomActivity && customActivityNames.includes(activityType) && (
-                <button
-                  type="button"
-                  className="link-button"
-                  onClick={() => handleRemoveCustomType(activityType)}
-                  aria-label={`Remove "${activityType}" from the activity dropdown`}
-                >
-                  Remove from list
-                </button>
-              )}
-            </div>
+            <ActivityTypeDropdown
+              builtIns={ACTIVITY_TYPES}
+              customTypes={customActivityNames}
+              activityType={activityType}
+              isCustomActivity={isCustomActivity}
+              onSelect={(name) => {
+                setIsCustomActivity(false);
+                setActivityType(name);
+              }}
+              onSelectCustom={() => setIsCustomActivity(true)}
+              onRemoveCustom={handleRemoveCustomType}
+            />
             {isCustomActivity && (
               <input
                 type="text"
@@ -1615,8 +1839,20 @@ const ClassSelector = ({
                   // control "Selected courses"' chips already use. An
                   // unassigned slot stays a single tap-to-assign button.
                   if (existing) {
+                    // Tinted per the activity's own colour (2026-09-09, on
+                    // request: "different activities have different color in
+                    // slot when they are selected") — same fixed palette and
+                    // dotted-box treatment as its actual box on the weekly
+                    // grid (`getActivityColor`, `TimetableGrid.jsx`), so a
+                    // Library slot and a Cafe slot read as visually distinct
+                    // here too, not just a uniform "assigned" highlight.
+                    const color = getActivityColor(existing.type);
                     return (
-                      <div key={s} className="option-row option-row-sync option-row-static is-checked">
+                      <div
+                        key={s}
+                        className="option-row option-row-sync option-row-static is-checked"
+                        style={{ backgroundColor: withAlpha(color, 0.16), borderLeft: `3px solid ${color}` }}
+                      >
                         <span className="option-text">
                           <span className="option-course">{existing.type}</span>
                           <span className="option-section">{slotLabel}</span>

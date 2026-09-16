@@ -364,6 +364,35 @@ button {
   color: var(--text-3);
 }
 
+/* Google accounts (2026-09-14) — a non-interactive row inside the Settings
+   menu (the signed-in identity display, and the "sign in" prompt that
+   hosts Google's own rendered button) — same layout as .menu-item but
+   never a button/link itself, no hover affordance. */
+.menu-item-static {
+  cursor: default;
+}
+
+.menu-item-static:hover {
+  background: none;
+}
+
+.menu-avatar {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.google-signin-btn {
+  flex-shrink: 0;
+}
+
+.menu-item-hint {
+  padding: 8px 10px;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
 /* ---------- Layout ---------- */
 
 .app-main {
@@ -458,6 +487,103 @@ button {
 .data-disclaimer svg {
   flex-shrink: 0;
   margin-top: 1px;
+}
+
+/* ---------- Sign-in banner (2026-09-15) ---------- */
+/* The very first thing on the page while signed out (on request: "make the
+   sign in appear at top in beginning") — a slim single-line strip, same
+   .card box as everything else, shown on every viewport (unlike the
+   mobile-only install card below — signing in is just as useful on
+   desktop). Hides itself entirely once signed in; see App.jsx's own
+   comment on why there's no manual dismiss. */
+.signin-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  flex-wrap: wrap;
+}
+
+.signin-banner-icon {
+  flex-shrink: 0;
+  color: var(--accent-ink);
+}
+
+.signin-banner-text {
+  flex: 1 1 auto;
+  min-width: 160px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+/* Shown instead of the normal sign-in prompt once signed in with a non-
+   FAST-NU email (2026-09-16, on request: "the ones loging in from other
+   emails should always have message at top(in place of login)") — same
+   .signin-banner shell, just tinted like `.alert-bar`'s danger/warning
+   variant so it visually reads as "needs attention," not a neutral prompt.
+   Persists for as long as the account stays signed in with that email —
+   there's no dismiss, matching the request that it "should always" show. */
+.signin-banner-warning {
+  background: var(--danger-soft);
+  border-color: rgba(217, 45, 32, 0.18);
+}
+
+.signin-banner-warning .signin-banner-icon {
+  color: var(--danger-ink);
+}
+
+.signin-banner-warning .signin-banner-text {
+  color: var(--danger-ink);
+}
+
+/* ---------- Install app card (2026-09-14) ---------- */
+/* Same .card box as "My classes" below it, but a slim single-line strip,
+   not a full hero card — kept deliberately small (on request: "should not
+   take much space"). Mobile-only (on request: "should only appear on
+   mobile version") via a hard `display: none` un-hidden only under the
+   app's existing ~720px mobile breakpoint, same one `.btn-label` etc.
+   already treat as "mobile" elsewhere in this file — desktop users never
+   see it at all, regardless of `showInstallCard`'s own state, since
+   `beforeinstallprompt` also fires on desktop Chrome/Edge and this is a
+   deliberate product choice, not a capability gap. No manual dismiss
+   button — stays up for the whole session unless the app is already
+   installed or just got installed (see App.jsx's
+   isRunningStandalone/appinstalled handling). */
+.install-card {
+  display: none;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+}
+
+.install-card-icon {
+  flex-shrink: 0;
+  color: var(--accent-ink);
+}
+
+.install-card-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.install-card-btn {
+  flex-shrink: 0;
+  height: 26px;
+  padding: 0 12px;
+  font-size: 12px;
+}
+
+@media (max-width: 720px) {
+  .install-card {
+    display: flex;
+  }
 }
 
 /* ---------- Class selector ---------- */
@@ -663,6 +789,17 @@ button {
 
 .action-btn-blue:hover {
   background: var(--accent-soft-strong);
+}
+
+/* "Add courses" (ClassSelector.jsx, "Selected courses" modal, 2026-09-10) —
+   .action-btn-blue is otherwise sized to its own text (fine inline next to
+   a row, e.g. Move/Update), but here it's the modal's own standalone lead
+   action, so it takes the full width with room below before the chip list. */
+.selector-add-courses-btn {
+  display: block;
+  width: 100%;
+  margin-bottom: 12px;
+  text-align: center;
 }
 
 .reschedule-select {
@@ -1270,6 +1407,7 @@ input.reschedule-select {
   font-size: 11px;
   font-weight: 700;
 }
+
 
 /* Replaces .mode-tabs + every search combobox entirely while a sync is
    active (App.jsx/ClassSelector.jsx: "Synced" takes over the whole

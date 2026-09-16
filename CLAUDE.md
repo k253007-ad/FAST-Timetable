@@ -167,6 +167,15 @@ Thursday slot 7." A per-device override, never a change to the shared data.
   `classOverrides_main` — same per-profile key scheme as `selectedClasses*` above, additive/
   separate keys. `useClassNotifications` reads `classOverrides_main` fresh from localStorage
   every tick, same reasoning as its existing `getMainClasses`.
+- **Auto-reset, two triggers (2026-09-10)** — see the workspace-root `CLAUDE.md`'s "Adjust
+  class times" entry (kept current there, this file's own description above is stale re: the
+  UI shape — it's a 3-step modal wizard now, not an inline collapsible section) for the full
+  account: (1) `App.jsx` prunes an override the moment its course+section is no longer in
+  `selectedClasses`; (2) `App.jsx` resets **every** profile's overrides the moment the master
+  sheet's own fetched content genuinely changes (a content hash, `timetableSignature` in
+  localStorage — not merely "a fetch happened," since the hourly auto-refresh re-fetches
+  identical data far more often than the sheet changes). Also added: a "Reset all" button in
+  the wizard's day-picker step (`ClassSelector.jsx`).
 - **UI** (`ClassSelector.jsx`): a collapsible "Adjust class times" section below the chip row, one
   `RescheduleRow` per occurrence with Day/Slot `<select>`s and a Move/Update/Reset button set.
   Its match/removal logic checks the occurrence's own original slots, not just
@@ -352,13 +361,39 @@ sheet — see above.
   never from React state — notifications must reflect the Main profile regardless of which
   profile tab is currently open in ClassSelector. Don't "simplify" this to read the `selectedClasses`
   prop/state instead; that would make notifications follow whatever profile you're browsing.
-- **`public/sw.js` must stay cache-free** — no `caches.open`/fetch-intercepting logic. It
-  exists for notification action buttons (`registration.showNotification`), PWA
-  installability, and (as of 2026-09-02) receiving real Web Push messages (`push` event) —
-  none of that requires caching anything. Adding an offline cache here reintroduces exactly
-  the stale-content risk flagged in the 2026-08-19 PWA discussion (service workers silently
-  serving old code to installed devices) — if that's ever wanted, it needs deliberate
-  cache-versioning design, not an incidental addition.
+- **`public/sw.js` caches ONLY the app shell, as of 2026-09-14 — superseded the earlier
+  "must stay cache-free" rule, which is kept below for history/context, not as current
+  policy.** The original rule was a real, deliberate choice (avoid the 2026-08-19-flagged
+  risk of a SW silently serving old code forever) but had a real, unmeasured cost: with zero
+  caching, even an *installed* PWA had to redownload the entire JS/CSS bundle over the network
+  on every single open before React could render anything — root-caused as the actual cause
+  of a direct report ("the pwa is taking long to open, another student made a pwa and it
+  loads instantly"). Fixed with exactly the "deliberate cache-versioning design" the original
+  rule's own closing sentence called for, not an incidental addition: a versioned
+  (`CACHE_NAME = 'fast-timetable-shell-v1'`, bump the version and old entries get deleted on
+  the next `activate`) stale-while-revalidate cache, narrowly scoped to same-origin GET
+  requests for the shell only (HTML/JS/CSS/manifest/icons) — `/api/*` and any cross-origin
+  request (the live Google Sheets data) are explicitly excluded in the fetch handler and
+  always hit the network untouched, so this cache can never be the thing serving stale
+  *timetable data* (that has its own separate, unrelated render-layer cache — see
+  `App.jsx`'s `getCachedTimetableSnapshot` under "Current state" in the workspace-root
+  `CLAUDE.md`). A cached shell response returns instantly if one exists, but every request —
+  hit or miss — also triggers a real background network refetch (kept alive via
+  `event.waitUntil`) that updates the cache for the *next* load, bounding staleness risk to
+  "one generation behind for a single load right after a deploy," the same tradeoff every
+  standard "instant PWA" shell cache already accepts (this is literally Workbox's
+  StaleWhileRevalidate pattern). If this ever needs to change again, keep it this narrow and
+  this deliberate — don't casually add caching for `/api/*` or cross-origin requests.
+  <details><summary>Original rule (2026-08-19 → 2026-09-14), kept for history</summary>
+
+  `public/sw.js` must stay cache-free — no `caches.open`/fetch-intercepting logic. It exists
+  for notification action buttons (`registration.showNotification`), PWA installability, and
+  (as of 2026-09-02) receiving real Web Push messages (`push` event) — none of that requires
+  caching anything. Adding an offline cache here reintroduces exactly the stale-content risk
+  flagged in the 2026-08-19 PWA discussion (service workers silently serving old code to
+  installed devices) — if that's ever wanted, it needs deliberate cache-versioning design, not
+  an incidental addition.
+  </details>
 - **`api/_lib/notifyLogic.js` and `src/hooks/useClassNotifications.js` must be kept in sync by
   hand** — see "Push notifications" above. They're intentionally separate implementations
   (one stateless per cron tick, one stateful via refs in a long-lived tab) of what must stay

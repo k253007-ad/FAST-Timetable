@@ -139,6 +139,33 @@ export const IconPhone = (props) => (
   </Icon>
 );
 
+// "Install app" card (App.jsx) — plain download-tray glyph.
+export const IconDownload = (props) => (
+  <Icon {...props}>
+    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+    <polyline points="7 10 12 15 17 10" />
+    <line x1="12" y1="15" x2="12" y2="3" />
+  </Icon>
+);
+
+// "Signed in" fallback avatar — shown when a signed-in account has no
+// profile picture (rare for a real Google account, but the field is
+// optional in the token claims).
+export const IconUser = (props) => (
+  <Icon {...props}>
+    <circle cx="12" cy="8" r="4" />
+    <path d="M4 21c0-4 3.5-7 8-7s8 3 8 7" />
+  </Icon>
+);
+
+export const IconLogOut = (props) => (
+  <Icon {...props}>
+    <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+    <polyline points="16 17 21 12 16 7" />
+    <line x1="21" y1="12" x2="9" y2="12" />
+  </Icon>
+);
+
 /** GitHub's own mark — a solid glyph, not one of the stroke-based Icon set
     above, so it's built standalone rather than through the shared Icon(). */
 export const IconGithub = ({ size = 18, ...props }) => (

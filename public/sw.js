@@ -1,25 +1,123 @@
 // Service worker — (a) makes the app installable as a PWA, (b) shows
 // LOCAL notifications via registration.showNotification() (the only way
-// action buttons like "Class Ended" render), and (c) as of 2026-09-02,
-// receives real Web Push messages from the server (api/notify-tick.js) and
-// displays those too — this is the part that can fire with the app fully
-// closed, since the browser wakes this worker up for an incoming push even
-// with no page open. Still does NOT cache anything: no offline shell, no
-// asset caching. That's deliberate — see fastTimetable/CLAUDE.md's PWA
-// notes on cache-versioning risk; a non-caching SW can never serve stale
-// content.
+// action buttons like "Class Ended" render), (c) as of 2026-09-02, receives
+// real Web Push messages from the server (api/notify-tick.js) and displays
+// those too — this is the part that can fire with the app fully closed,
+// since the browser wakes this worker up for an incoming push even with no
+// page open — and (d) as of 2026-09-14, caches the app SHELL only (see
+// below) to fix a real "PWA takes long to open" report.
+
+// ---------- App-shell cache (2026-09-14) ----------
+// Deliberately narrow and versioned — this project's own standing rule was
+// "a non-caching SW can never serve stale content," which was true but had
+// a real cost nobody had measured: with zero caching, even an INSTALLED
+// home-screen PWA has to redownload the entire JS/CSS bundle over the
+// network before React can so much as paint a loading skeleton, every
+// single open. That's the actual root cause behind a direct report ("the
+// pwa is taking long to open, another student made a pwa and it loads
+// instantly") — a competing PWA that "loads instantly" almost certainly
+// has exactly this kind of shell cache.
+//
+// Scope is deliberately narrow: ONLY same-origin GET requests for the app
+// shell itself (the HTML page, the built /assets/*.js|css, icons,
+// manifest) ever touch this cache. `/api/*` and any cross-origin request
+// (the live Google Sheets data this app's whole purpose depends on being
+// fresh) are explicitly excluded below and always go straight to the
+// network, untouched — this cache has nothing to do with, and can never
+// make stale, the actual timetable data (that has its own separate,
+// render-layer "show cached last-known data instantly, then quietly
+// refresh" mechanism in App.jsx's `getCachedTimetableSnapshot`, which is
+// unrelated to this cache and works even in a browser tab with no SW at
+// all).
+//
+// Strategy is stale-while-revalidate, not cache-first-forever: a cached
+// shell response is returned immediately if one exists (this is what makes
+// the next open instant), but EVERY request — hit or miss — also kicks off
+// a real network fetch that updates the cache for the *next* load. That
+// bounds the staleness risk to "one generation behind for a single load
+// right after a new version deploys," the same accepted tradeoff behind
+// every standard "instant-loading" PWA shell cache (this is the exact
+// pattern Workbox calls StaleWhileRevalidate) — never "silently stuck on
+// old code forever," which is what the original hard-constraint note was
+// actually worried about. `CACHE_NAME` carries an explicit version so
+// `activate` can delete any previous version's entries outright instead of
+// accumulating them across deploys.
+const CACHE_VERSION = 'v1';
+const CACHE_NAME = `fast-timetable-shell-${CACHE_VERSION}`;
+
+// `registerServiceWorker()` (src/utils/notifications.js) runs unconditionally
+// in both `npm run dev` and production — there's no dev/prod flag available
+// inside this file (public/ is copied verbatim by Vite, no env-var
+// substitution, same reason the VAPID key below is hardcoded rather than
+// read from import.meta.env). Without this guard, the shell cache below
+// would also intercept and cache Vite's own dev-server module responses —
+// actively wrong there: dev relies on every edit being reflected on the
+// next reload via HMR/a fresh fetch, and a cached stale module would look
+// exactly like a real, confusing bug while iterating. `npm run dev` always
+// serves from localhost, real deployments never do, so this is a reliable,
+// standard way to tell the two apart from inside the SW itself.
+const IS_DEV_HOST = self.location.hostname === 'localhost' || self.location.hostname === '127.0.0.1';
 
 self.addEventListener('install', () => {
   self.skipWaiting();
 });
 
 self.addEventListener('activate', (event) => {
-  event.waitUntil(self.clients.claim());
+  event.waitUntil(
+    (async () => {
+      const keys = await caches.keys();
+      await Promise.all(
+        keys.filter((key) => key.startsWith('fast-timetable-shell-') && key !== CACHE_NAME).map((key) => caches.delete(key))
+      );
+      await self.clients.claim();
+    })()
+  );
 });
 
-// No-op passthrough — required for some browsers' installability checks,
-// but we never intercept or cache the response.
-self.addEventListener('fetch', () => {});
+self.addEventListener('fetch', (event) => {
+  if (IS_DEV_HOST) return; // see IS_DEV_HOST's own comment above
+
+  const { request } = event;
+  // Never intercept anything but a plain GET — every other request this
+  // app makes (api/subscribe, api/mark-ended, ... all POST) must reach the
+  // network untouched regardless.
+  if (request.method !== 'GET') return;
+
+  const url = new URL(request.url);
+  // Cross-origin: the live Google Sheets gviz endpoints, FCM, etc. — always
+  // network, never cached, no exceptions.
+  if (url.origin !== self.location.origin) return;
+  // This app's own API routes — the timetable/roll-number metadata and any
+  // push-related GETs must always be fetched fresh; caching these here
+  // would silently reintroduce exactly the staleness this cache is
+  // designed never to cause. (The actual instant-first-paint behavior for
+  // this data lives at the render layer instead — see the big comment
+  // above.)
+  if (url.pathname.startsWith('/api/')) return;
+
+  // Everything else same-origin GET is the app shell itself — stale-while-
+  // revalidate: serve from cache immediately if present, always also
+  // refetch over the network in the background (via event.waitUntil, so
+  // the SW isn't killed before that background update finishes) to keep
+  // the cache current for the *next* open.
+  event.respondWith(
+    (async () => {
+      const cache = await caches.open(CACHE_NAME);
+      const cached = await cache.match(request);
+
+      const revalidate = fetch(request)
+        .then((response) => {
+          if (response.ok) cache.put(request, response.clone());
+          return response;
+        })
+        .catch(() => null);
+
+      event.waitUntil(revalidate);
+
+      return cached || (await revalidate) || Response.error();
+    })()
+  );
+});
 
 const notifyClients = async (message) => {
   const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });

@@ -20,12 +20,25 @@ import {
   openGoogleCalendarSubscribePrompt,
 } from './utils/calendarExport.js';
 import {
+  isGoogleSignInConfigured,
+  initGoogleSignIn,
+  renderGoogleSignInButton,
+  disableGoogleAutoSelect,
+  exchangeGoogleCredential,
+  fetchGoogleSession,
+  logoutGoogleServer,
+  pushAccountSync,
+} from './utils/googleAuth.js';
+import { isNuEmail, getRollNoFromNuEmail } from './utils/nuEmail.js';
+import {
   BrandMark,
   IconAlert,
   IconBell,
   IconBellOff,
   IconCalendar,
+  IconDownload,
   IconGithub,
+  IconLogOut,
   IconPhone,
   IconPrinter,
   IconImage,
@@ -33,6 +46,7 @@ import {
   IconRefresh,
   IconSettings,
   IconSun,
+  IconUser,
 } from './components/Icons.jsx';
 import './index.css';
 
@@ -49,6 +63,64 @@ const getInitialTheme = () => {
   }
   return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 };
+
+// Last-good timetable snapshot (added 2026-09-14, diagnosing "PWA takes long
+// to open" vs. a competing student PWA that "loads instantly") — this app
+// always fetches genuinely fresh data over the network on every load (the
+// whole point of a manually-updated shared sheet is that it can change at
+// any time), but there is no reason the FIRST PAINT has to wait on that
+// fetch: it can render last session's data instantly, then quietly swap in
+// the real fetch's result the moment it arrives, same "stale-while-
+// revalidate" idea already used at the HTTP layer by faster sites. This is
+// purely a perceived-speed optimization at the render layer — the network
+// fetch in `getData()` below is completely unchanged, still runs every
+// load, still is the only source of truth once it resolves.
+const TIMETABLE_CACHE_KEY = 'cachedTimetableData';
+
+const getCachedTimetableSnapshot = () => {
+  try {
+    const saved = JSON.parse(localStorage.getItem(TIMETABLE_CACHE_KEY) || 'null');
+    // Shape-checked, not just truthy — this bypasses the loading skeleton
+    // entirely (see `status`'s initializer below), so a malformed or
+    // schema-drifted cache entry (e.g. saved by a future/past app version
+    // with a different `timetableData` shape) must be rejected here rather
+    // than crash deep inside a component that assumes `.timetable` is an
+    // array.
+    if (saved?.data && Array.isArray(saved.data.timetable) && saved.at) return saved;
+  } catch {
+    /* storage unavailable, or the cached JSON was corrupt */
+  }
+  return null;
+};
+
+const saveCachedTimetableSnapshot = (data) => {
+  try {
+    localStorage.setItem(TIMETABLE_CACHE_KEY, JSON.stringify({ data, at: Date.now() }));
+  } catch {
+    /* storage unavailable (e.g. full, or private-browsing quota) — the app
+       still works, just without the instant-first-paint benefit next open */
+  }
+};
+
+// "Install app" card (added 2026-09-14) — is the site currently running as
+// an installed PWA rather than a normal browser tab? `display-mode:
+// standalone` is the cross-browser signal (Chrome/Edge/Android, and
+// desktop installs); `navigator.standalone` is Safari's own pre-standard
+// equivalent for an iOS home-screen install, which never matches the media
+// query. Checked once on load (not reactively) to decide whether to show
+// the card at all — once true, it can never become false again within a
+// single page load (an install can't un-install itself mid-session).
+const isRunningStandalone = () =>
+  window.matchMedia?.('(display-mode: standalone)').matches || window.navigator.standalone === true;
+
+// iOS Safari/Chrome never fire `beforeinstallprompt` and have no
+// programmatic install API at all — "Add to Home Screen" is a manual step
+// under the Share sheet. Detected by user-agent (there's no feature-test
+// for "this browser lacks an install prompt" — the card has to know to
+// show instructions instead of a button before ever finding out whether
+// `beforeinstallprompt` fires, since not-firing looks identical to
+// "hasn't fired yet").
+const isIOS = () => /iphone|ipad|ipod/i.test(window.navigator.userAgent);
 
 const PROFILE_COUNT = 5;
 
@@ -99,6 +171,28 @@ const getSavedOverrides = (profile) => {
   } catch {
     return [];
   }
+};
+
+// 1-5 plus 'main' — every profile slot's override storage, used by the
+// "master sheet actually changed" reset below (2026-09-10) so a stale
+// override can't survive under a profile that isn't currently open.
+const ALL_OVERRIDE_PROFILES = [1, 2, 3, 4, 5, 'main'];
+const TIMETABLE_SIGNATURE_KEY = 'timetableSignature';
+
+// Cheap content fingerprint for "did the sheet's actual data change", not
+// "did a fetch happen" — the hourly auto-refresh re-fetches identical data
+// far more often than the sheet genuinely changes, so a plain djb2-style
+// string hash (not cryptographic, just needs to differ when the content
+// does) is enough; no need to store or compare the full JSON. Shared by the
+// master-timetable-change override reset below and the roll-number-sheet-
+// change resync in ClassSelector's sync effect (2026-09-10).
+const hashContent = (rows) => {
+  const str = JSON.stringify(rows || []);
+  let h = 0;
+  for (let i = 0; i < str.length; i++) {
+    h = (h * 31 + str.charCodeAt(i)) >>> 0;
+  }
+  return h.toString(36);
 };
 
 // One-off "extra class" additions ("just this week, add one more Data
@@ -159,6 +253,134 @@ const getSavedSync = (profile) => {
   }
 };
 
+const ALL_PROFILES = ['main', 1, 2, 3, 4, 5];
+
+// Raw key literals duplicated from their owning modules on purpose (rather
+// than importing a getter/setter from each) — ClassSelector.jsx's
+// CUSTOM_ACTIVITY_KEY, useClassNotifications.js's NOTIF_ENABLED_KEY, and
+// calendarExport.js's CALENDAR_FEED_ID_KEY are all device-wide (not
+// per-profile) preferences that make sense to carry along with an account
+// too. This is the one place outside each of those files that needs to
+// know these specific strings; keep it in sync by hand if any of them ever
+// change (same "kept in sync by hand" tradeoff already accepted elsewhere
+// in this codebase, e.g. notifyLogic.js/useClassNotifications.js).
+const CUSTOM_ACTIVITY_KEY = 'customActivityTypes';
+const NOTIF_ENABLED_KEY = 'notificationsUserEnabled';
+const CALENDAR_FEED_ID_KEY = 'calendarFeedId';
+
+// Builds the full "everything this device would otherwise remember"
+// snapshot sent to /api/sync — see the "Google accounts" section of the
+// workspace-root CLAUDE.md for the exact shape and why it covers all 6
+// profile slots (not just the one currently open) plus device-wide
+// preferences. `liveActive` lets the caller supply the CURRENTLY active
+// profile's real-time React state for its 5 fields instead of whatever's
+// last been flushed to localStorage — the two are normally in sync within
+// a render or two anyway (separate persist-effects write each field), but
+// passing the live values avoids a theoretical race where a sync fires in
+// the same tick as a state change that hasn't been persisted yet.
+const buildAccountSyncPayload = (activeProfile, liveActive) => {
+  const profiles = {};
+  ALL_PROFILES.forEach((profile) => {
+    if (profile === activeProfile) {
+      profiles[profile] = liveActive;
+    } else {
+      profiles[profile] = {
+        selectedClasses: getSavedClasses(profile),
+        overrides: getSavedOverrides(profile),
+        extraClasses: getSavedExtras(profile),
+        activities: getSavedActivities(profile),
+        linkedSync: getSavedSync(profile),
+      };
+    }
+  });
+  let customActivityTypes = [];
+  try {
+    customActivityTypes = JSON.parse(localStorage.getItem(CUSTOM_ACTIVITY_KEY) || '[]');
+  } catch {
+    /* storage unavailable or corrupt — sync an empty list rather than throw */
+  }
+  return {
+    profiles,
+    activeProfile,
+    theme: getInitialTheme(),
+    customActivityTypes,
+    notificationsEnabled: localStorage.getItem(NOTIF_ENABLED_KEY) !== 'false',
+    calendarFeedId: localStorage.getItem(CALENDAR_FEED_ID_KEY) || null,
+  };
+};
+
+// The inverse — writes an account's synced data back into this device's
+// localStorage (every profile slot, not just the active one) and, for
+// whichever profile ends up active, also updates the live React state via
+// the setters passed in `setters`, so the currently-rendered UI reflects
+// the newly-applied account data immediately rather than only on next
+// profile switch/reload.
+const applyAccountData = (data, setters) => {
+  if (!data || typeof data !== 'object') return;
+
+  ALL_PROFILES.forEach((profile) => {
+    const p = data.profiles?.[profile];
+    if (!p) return;
+    try {
+      localStorage.setItem(getProfileStorageKey(profile), JSON.stringify(p.selectedClasses || []));
+      localStorage.setItem(getOverrideStorageKey(profile), JSON.stringify(p.overrides || []));
+      localStorage.setItem(getExtraStorageKey(profile), JSON.stringify(p.extraClasses || []));
+      localStorage.setItem(getActivityStorageKey(profile), JSON.stringify(p.activities || []));
+      if (p.linkedSync) localStorage.setItem(getSyncStorageKey(profile), JSON.stringify(p.linkedSync));
+      else localStorage.removeItem(getSyncStorageKey(profile));
+    } catch {
+      /* storage unavailable — this device just won't have the synced copy locally */
+    }
+  });
+
+  const nextActive = ALL_PROFILES.includes(data.activeProfile) ? data.activeProfile : 'main';
+  try {
+    localStorage.setItem('activeProfile', String(nextActive));
+  } catch {
+    /* storage unavailable */
+  }
+
+  if (Array.isArray(data.customActivityTypes)) {
+    try {
+      localStorage.setItem(CUSTOM_ACTIVITY_KEY, JSON.stringify(data.customActivityTypes));
+    } catch {
+      /* storage unavailable */
+    }
+  }
+  if (typeof data.notificationsEnabled === 'boolean') {
+    try {
+      localStorage.setItem(NOTIF_ENABLED_KEY, String(data.notificationsEnabled));
+    } catch {
+      /* storage unavailable */
+    }
+  }
+  if (data.calendarFeedId) {
+    try {
+      localStorage.setItem(CALENDAR_FEED_ID_KEY, data.calendarFeedId);
+    } catch {
+      /* storage unavailable */
+    }
+  }
+  if (data.theme === 'light' || data.theme === 'dark') {
+    try {
+      localStorage.setItem('theme', data.theme);
+    } catch {
+      /* storage unavailable */
+    }
+    setters.setTheme(data.theme);
+  }
+
+  const activeData = data.profiles?.[nextActive];
+  setters.setActiveProfile(nextActive);
+  if (activeData) {
+    setters.setSelectedClasses(activeData.selectedClasses || []);
+    setters.setOverrides(activeData.overrides || []);
+    setters.setExtraClasses(activeData.extraClasses || []);
+    setters.setActivities(activeData.activities || []);
+    setters.setLinkedSync(activeData.linkedSync || null);
+  }
+};
+
 const timeAgo = (date, now) => {
   const mins = Math.floor((now - date.getTime()) / 60000);
   if (mins < 1) return 'just now';
@@ -174,12 +396,72 @@ const getTodayName = () => {
   return DAY_ORDER.includes(name) ? name : DAY_ORDER[0];
 };
 
+// Google's own rendered "Sign in with Google" button (googleAuth.js) has
+// to be rendered into a real DOM node it controls, not built as normal
+// JSX — this small wrapper owns that node and re-initializes/re-renders it
+// whenever it (re)mounts, which happens each time the Settings menu opens
+// while signed out (the menu's contents unmount when closed). If
+// VITE_GOOGLE_CLIENT_ID isn't configured yet (see .env.example), shows a
+// plain explanatory line instead of a button that could never work.
+const GoogleSignInButton = ({ onCredential }) => {
+  const containerRef = useRef(null);
+
+  useEffect(() => {
+    if (!isGoogleSignInConfigured()) return undefined;
+    let cancelled = false;
+    initGoogleSignIn(onCredential).then((ok) => {
+      if (!cancelled && ok) renderGoogleSignInButton(containerRef.current, { width: 200 });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [onCredential]);
+
+  if (!isGoogleSignInConfigured()) {
+    return <p className="menu-item-hint">Google sign-in isn&rsquo;t set up yet.</p>;
+  }
+  return <div ref={containerRef} className="google-signin-btn" />;
+};
+
 function App() {
-  const [timetableData, setTimetableData] = useState(null);
-  const [status, setStatus] = useState('loading'); // 'loading' | 'ready' | 'error'
+  const [timetableData, setTimetableData] = useState(() => getCachedTimetableSnapshot()?.data ?? null);
+  // Read by the "Keep synced" resolve effect below instead of depending on
+  // `timetableData` directly — see that effect's own comment for why.
+  const timetableDataRef = useRef(timetableData);
+  useEffect(() => {
+    timetableDataRef.current = timetableData;
+  }, [timetableData]);
+  // Content fingerprints (not raw `timetableData`, which gets a new object
+  // reference every fetch even when byte-identical) that change value only
+  // when the master sheet's or the roll-number sheet's actual rows do —
+  // see the "Keep synced" resolve effect and `hashContent`'s own comment.
+  const timetableHash = useMemo(() => hashContent(timetableData?.timetable), [timetableData]);
+  const rollNumbersHash = useMemo(() => hashContent(timetableData?.rollNumbers), [timetableData]);
+  // 'loading' | 'ready' | 'error' — starts 'ready' when a cached snapshot
+  // exists (see getCachedTimetableSnapshot above), so a returning student
+  // sees last session's schedule instantly instead of the loading skeleton
+  // while the real, fresh fetch runs quietly in the background.
+  const [status, setStatus] = useState(() => (getCachedTimetableSnapshot() ? 'ready' : 'loading'));
   const [refreshing, setRefreshing] = useState(false);
   const [refreshError, setRefreshError] = useState(false);
-  const [lastUpdated, setLastUpdated] = useState(null);
+  // Distinguishes "you're offline" from "the fetch failed for some other
+  // reason" purely for the alert bar's wording below — both cases already
+  // behave identically otherwise (cached data keeps showing either way).
+  const [isOffline, setIsOffline] = useState(() => typeof navigator !== 'undefined' && !navigator.onLine);
+  useEffect(() => {
+    const goOnline = () => setIsOffline(false);
+    const goOffline = () => setIsOffline(true);
+    window.addEventListener('online', goOnline);
+    window.addEventListener('offline', goOffline);
+    return () => {
+      window.removeEventListener('online', goOnline);
+      window.removeEventListener('offline', goOffline);
+    };
+  }, []);
+  const [lastUpdated, setLastUpdated] = useState(() => {
+    const cached = getCachedTimetableSnapshot();
+    return cached ? new Date(cached.at) : null;
+  });
   const [now, setNow] = useState(() => Date.now());
   const [exporting, setExporting] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
@@ -201,17 +483,231 @@ function App() {
   // alongside it. Clicking "Today" always jumps back to the real today.
   const [gridView, setGridView] = useState('week');
   const [gridDay, setGridDay] = useState(getTodayName);
+  // "Install app" card — see isRunningStandalone/isIOS above for what each
+  // of these means. `installPrompt` holds the captured `beforeinstallprompt`
+  // event itself (calling `.prompt()` on it is the only way to show
+  // Chrome/Edge/Android's native install dialog, and it can only be called
+  // once per captured event). `showInstallCard` starts `true` unless
+  // already running standalone at load — the one condition that hides the
+  // card outright, everything else (no prompt captured yet, iOS, dismissed
+  // the native prompt) keeps it showing, matching "stays until the user
+  // downloads the app" — there's deliberately no manual close button.
+  const [installPrompt, setInstallPrompt] = useState(null);
+  const [showInstallCard, setShowInstallCard] = useState(() => !isRunningStandalone());
+  // Google accounts / cross-device sync (added 2026-09-14). `account` is
+  // `null` while signed out, `{ user: { email, name, picture } }` once
+  // signed in — deliberately never holds the raw synced `data` itself as
+  // React state (it's applied straight into the existing per-profile
+  // localStorage + state via applyAccountData instead, see the sign-in
+  // handler below), so there's exactly one source of truth for "what's
+  // currently selected," not two that could drift apart. `authChecked`
+  // gates rendering the Settings menu's sign-in/out UI until the initial
+  // session check (a network round trip) resolves, so it doesn't flash a
+  // "Sign in" button for a fraction of a second on every load for a
+  // student who's actually already signed in.
+  const [account, setAccount] = useState(null);
+  const [authChecked, setAuthChecked] = useState(false);
+  const [accountNotice, setAccountNotice] = useState(null); // { state: 'signed-in' | 'error', message } | null
 
   const captureRef = useRef(null);
   const exportMenuRef = useRef(null);
   const settingsMenuRef = useRef(null);
   const hasDataRef = useRef(false);
+  // Marks a real, explicit sign-in action (set in `handleGoogleCredential`)
+  // so the FAST-NU-email auto-sync effect below can tell that apart from the
+  // silent session-restore on every page load — see that effect's own
+  // comment for why the distinction matters.
+  const justSignedInRef = useRef(false);
 
   const notif = useClassNotifications(timetableData);
 
   useEffect(() => {
     hasDataRef.current = timetableData !== null;
   }, [timetableData]);
+
+  // "Install app" card, part 2 — Chrome/Edge/Android fire
+  // `beforeinstallprompt` once the browser's own installability criteria
+  // are met (manifest + service worker present, both already true here);
+  // `preventDefault()` stops the browser's own mini-infobar so this card is
+  // the only install UI shown, and the event itself is stashed so the
+  // card's button can call `.prompt()` on it later, on a real user click
+  // (`.prompt()` silently no-ops without a user gesture right before it).
+  // `appinstalled` is the one thing allowed to hide the card outright after
+  // load — an actual successful install, not a dismissed prompt (dismissing
+  // the native dialog does NOT fire this event, so the card correctly stays
+  // up per "stays until the user downloads the app").
+  useEffect(() => {
+    const onBeforeInstallPrompt = (e) => {
+      e.preventDefault();
+      setInstallPrompt(e);
+    };
+    const onAppInstalled = () => {
+      setShowInstallCard(false);
+      setInstallPrompt(null);
+    };
+    window.addEventListener('beforeinstallprompt', onBeforeInstallPrompt);
+    window.addEventListener('appinstalled', onAppInstalled);
+    return () => {
+      window.removeEventListener('beforeinstallprompt', onBeforeInstallPrompt);
+      window.removeEventListener('appinstalled', onAppInstalled);
+    };
+  }, []);
+
+  // Google accounts — restore a signed-in session on load (a returning
+  // visit with a still-valid session cookie), applying whatever the
+  // account has synced so far straight into this device's own storage +
+  // live state. Runs once on mount; deliberately does NOT depend on
+  // anything else, since it should only ever fire for the initial page
+  // load's own session check, not re-run every time some unrelated piece
+  // of state changes.
+  useEffect(() => {
+    (async () => {
+      const { user, data } = await fetchGoogleSession();
+      if (user) {
+        setAccount({ user });
+        applyAccountData(data, {
+          setTheme,
+          setActiveProfile,
+          setSelectedClasses,
+          setOverrides,
+          setExtraClasses,
+          setActivities,
+          setLinkedSync,
+        });
+      }
+      setAuthChecked(true);
+    })();
+  }, []);
+
+  // Fires once GIS hands back a signed JWT credential from the rendered
+  // "Sign in with Google" button (see the Settings-menu JSX below) —
+  // exchanges it for a real session, then either applies the account's
+  // existing data (a returning student signing in on a new device) or
+  // uploads this device's current data as the account's starting point (a
+  // brand-new account, "migrate it to your account" per the original
+  // request).
+  const handleGoogleCredential = useCallback(
+    async (credential) => {
+      try {
+        const localData = buildAccountSyncPayload(activeProfile, {
+          selectedClasses,
+          overrides,
+          extraClasses,
+          activities,
+          linkedSync,
+        });
+        const { user, data, isNewAccount } = await exchangeGoogleCredential(credential, localData);
+        justSignedInRef.current = true;
+        setAccount({ user });
+        if (!isNewAccount) {
+          applyAccountData(data, {
+            setTheme,
+            setActiveProfile,
+            setSelectedClasses,
+            setOverrides,
+            setExtraClasses,
+            setActivities,
+            setLinkedSync,
+          });
+        }
+        setAccountNotice({
+          state: 'signed-in',
+          message: isNewAccount
+            ? `Signed in as ${user.name} — this device's classes are now saved to your account.`
+            : `Signed in as ${user.name} — your saved classes have been loaded.`,
+        });
+        setSettingsOpen(false);
+      } catch (err) {
+        console.error('Google sign-in failed:', err);
+        setAccountNotice({ state: 'error', message: 'Sign-in failed — please try again.' });
+      }
+    },
+    [activeProfile, selectedClasses, overrides, extraClasses, activities, linkedSync]
+  );
+
+  const handleGoogleSignOut = useCallback(async () => {
+    disableGoogleAutoSelect();
+    await logoutGoogleServer();
+    setAccount(null);
+    setSettingsOpen(false);
+  }, []);
+
+  // FAST NU student emails (k<YY><NNNN>@nu.edu.pk) encode the student's own
+  // roll number directly — auto-link the Main profile to it the moment a
+  // sign-in with one of these addresses actually completes (2026-09-16, on
+  // request: "if the login has k(Roll-No)@nu.edu.pk in it then make it so it
+  // automatically syncs to roll no"). Gated on `justSignedInRef` (set in
+  // `handleGoogleCredential` above) rather than running on every `account`
+  // change, so this only fires for a real, explicit sign-in action — not the
+  // silent session-restore on every page load (the mount effect above), which
+  // would otherwise fight a student who'd deliberately cancelled the sync
+  // since their last sign-in.
+  //
+  // Deliberately a separate effect watching BOTH `account` and
+  // `activeProfile` rather than running this logic directly inline in
+  // `handleGoogleCredential`, to dodge a real race: for a RETURNING account,
+  // `applyAccountData` above may itself call `setActiveProfile` from the
+  // account's own stored `activeProfile` — reading the `activeProfile`
+  // closure variable synchronously inside `handleGoogleCredential` would see
+  // the OLD value, since that setState call hasn't committed yet at that
+  // point. This effect instead re-runs once both updates land in the same
+  // commit, so `activeProfile` here is always the truly current value.
+  //
+  // **Always targets the Main profile specifically, never whichever profile
+  // tab happens to be active** — same convention push notifications and the
+  // calendar feed already use for "the signed-in student's own schedule."
+  // Written straight to Main's own storage key so it applies even when Main
+  // isn't the currently active profile (picked up next time it's switched to
+  // or the page reloads, via the existing `getSavedSync`/resolve-effect
+  // path); also pushed into live `linkedSync` state when Main IS active, so
+  // the resolve effect (`getClassesForRollNo` above) picks it up and
+  // populates the grid immediately instead of only on next switch/reload. A
+  // fresh `{ type: 'rollno', value }` (no `lastLive`) deliberately overrides
+  // whatever Main was previously linked to, or not linked to at all —
+  // signing in with a real FAST NU email is a stronger, more authoritative
+  // signal of exactly which roll number this student is than any prior
+  // manual link, on this device or a previously synced one.
+  useEffect(() => {
+    if (!justSignedInRef.current || !account) return;
+    justSignedInRef.current = false;
+    const rollNo = getRollNoFromNuEmail(account.user.email);
+    if (!rollNo) return;
+    const autoSync = { type: 'rollno', value: rollNo };
+    try {
+      localStorage.setItem(getSyncStorageKey('main'), JSON.stringify(autoSync));
+    } catch {
+      /* storage unavailable — the live state update below still covers this tab */
+    }
+    if (activeProfile === 'main') {
+      setLinkedSync(autoSync);
+    }
+  }, [account, activeProfile]);
+
+  // Keeps the account's synced data current: whenever anything that
+  // `buildAccountSyncPayload` covers changes while signed in, re-uploads
+  // the full payload (debounced by comparing against the last-synced JSON,
+  // same technique already used for the calendar-feed and push-
+  // notification resyncs elsewhere in this app) — this is what makes
+  // syncing mean "any change on any signed-in device reaches every other
+  // one," not just a one-time import at sign-in.
+  const lastAccountSyncRef = useRef(null);
+  useEffect(() => {
+    if (!account) {
+      lastAccountSyncRef.current = null;
+      return;
+    }
+    const payload = buildAccountSyncPayload(activeProfile, {
+      selectedClasses,
+      overrides,
+      extraClasses,
+      activities,
+      linkedSync,
+    });
+    const serialized = JSON.stringify(payload);
+    if (serialized === lastAccountSyncRef.current) return;
+    lastAccountSyncRef.current = serialized;
+    pushAccountSync(payload);
+  }, [account, activeProfile, selectedClasses, overrides, extraClasses, activities, linkedSync, theme]);
 
   // Persist selection under the active profile's slot (legacy key + format
   // kept for profile 1, so existing users' saved selections keep working).
@@ -273,6 +769,23 @@ function App() {
     });
   }, [timetableData, selectedClasses, overrides, activities]);
 
+  // Auto-prune "Adjust class times" overrides for a course+section the
+  // student no longer has selected (2026-09-10, on request) — an override
+  // keyed to a course that's since been deselected is dead weight: it can
+  // never show up in the "Adjust class times" list any more (that list is
+  // built from `selectedClasses`), but it silently persists in storage and
+  // would spring back to life if the exact same course+section were ever
+  // reselected later, moving it to wherever it was left with no visible
+  // explanation. `selectedClasses.includes(...)` reuses the identical
+  // "Course - Section" membership check already used everywhere else in
+  // this codebase (schedule.js), so no new normalization logic is needed.
+  useEffect(() => {
+    setOverrides((prev) => {
+      const next = prev.filter((o) => selectedClasses.includes(`${o.course} - ${o.section}`));
+      return next.length === prev.length ? prev : next;
+    });
+  }, [selectedClasses]);
+
   useEffect(() => {
     try {
       const key = getSyncStorageKey(activeProfile);
@@ -284,26 +797,78 @@ function App() {
   }, [linkedSync, activeProfile]);
 
   // "Keep synced" — whenever the profile has a linked roll no/section,
-  // re-resolves it against whatever `timetableData` currently holds
-  // (initial load, hourly auto-refresh, manual refresh) and **replaces
-  // `selectedClasses` outright** with that group's current classes — this
-  // is what makes syncing mean "your selection IS this roll no/section,"
-  // not "these classes are also included." Runs on the very first pick too
-  // (setLinkedSync itself is a dependency), so there's no separate
-  // "apply once immediately" code path. `null` from getClassesForRollNo/
-  // getClassesForSection means the relevant data source isn't loaded yet
-  // (skip — don't wipe the selection over a transient gap); `[]` means it
-  // loaded and this roll no/section genuinely has zero classes right now,
-  // which is a real state to apply.
+  // re-resolves it against the current data. `null` from
+  // getClassesForRollNo/getClassesForSection means the relevant data
+  // source isn't loaded yet (skip — don't wipe the selection over a
+  // transient gap); `[]` means it loaded and this roll no/section
+  // genuinely has zero classes right now, which is a real state to apply.
+  //
+  // **Additive/subtractive, not a destructive full replace (2026-09-10, on
+  // request: "Add courses should not De-Sync the roll-no. added courses
+  // should be synced to roll no and removed courses should be removed")**
+  // — the very first time a given sync target is resolved (a fresh pick,
+  // or `linkedSync.lastLive` is missing because it predates this design),
+  // `selectedClasses` is fully replaced with `live` and that snapshot is
+  // remembered as `linkedSync.lastLive`. Every resolve *after* that only
+  // applies the DIFF between the new `live` and the remembered
+  // `lastLive` — courses the university added since last time get added,
+  // courses the university dropped get removed — on top of whatever
+  // `selectedClasses` currently is, rather than discarding it. This is
+  // what lets a student freely add a course (via the "Search courses"
+  // popup, no longer cancelling sync — see `openCourseSearch`,
+  // `ClassSelector.jsx`) or remove one (via a "Selected courses" chip) and
+  // have that survive the next resync: neither action is itself part of
+  // `live` vs `lastLive`, so the diff never touches it. `lastLive` is
+  // stored *inside* `linkedSync` (persisted the same way `linkedSync`
+  // already is, per profile) specifically so this survives a page reload
+  // too, not just the current tab session — without it, reloading would
+  // have no memory of "what was official last time" and would fall back
+  // to a full replace, silently discarding any manual additions/removals
+  // made in a previous session.
+  //
+  // **Re-resolves on actual sheet content changing, not merely "a fetch
+  // happened" (2026-09-10, on request: resync "when it is changed by me in
+  // spreadsheet," not "when it is taken from spread sheet")** — depends on
+  // `timetableHash`/`rollNumbersHash` (below) rather than `timetableData`
+  // itself: `timetableData` gets a brand-new object reference on every
+  // fetch (hourly auto-refresh included) even when the sheet's actual rows
+  // are byte-identical, which would otherwise re-run this effect on every
+  // routine refetch for no reason. Reads `timetableData` through a ref
+  // instead of a dependency — the ref is intentionally not itself a
+  // trigger, the hashes are. This effect also calls `setLinkedSync` itself
+  // (to update `lastLive`), which re-triggers it once more via the
+  // `linkedSync` dependency — that second pass finds `live` already equal
+  // to the just-stored `lastLive`, computes an empty diff, and returns
+  // without looping further.
   useEffect(() => {
-    if (!timetableData || !linkedSync) return;
+    const data = timetableDataRef.current;
+    if (!data || !linkedSync) return;
     const live =
       linkedSync.type === 'rollno'
-        ? getClassesForRollNo(timetableData, linkedSync.value)
-        : getClassesForSection(timetableData, linkedSync.value);
+        ? getClassesForRollNo(data, linkedSync.value)
+        : getClassesForSection(data, linkedSync.value);
     if (live === null) return;
-    setSelectedClasses(live);
-  }, [timetableData, activeProfile, linkedSync]);
+
+    if (linkedSync.lastLive === undefined) {
+      setSelectedClasses(live);
+      setLinkedSync({ ...linkedSync, lastLive: live });
+      return;
+    }
+
+    const prevLive = linkedSync.lastLive;
+    const addedByUniversity = live.filter((c) => !prevLive.includes(c));
+    const removedByUniversity = prevLive.filter((c) => !live.includes(c));
+    if (addedByUniversity.length === 0 && removedByUniversity.length === 0) return;
+
+    setSelectedClasses((prev) => {
+      const next = prev.filter((c) => !removedByUniversity.includes(c));
+      addedByUniversity.forEach((c) => {
+        if (!next.includes(c)) next.push(c);
+      });
+      return next;
+    });
+    setLinkedSync({ ...linkedSync, lastLive: live });
+  }, [timetableHash, rollNumbersHash, activeProfile, linkedSync]);
 
   const switchProfile = useCallback((profile) => {
     setActiveProfile(profile);
@@ -335,7 +900,9 @@ function App() {
     }
     try {
       const data = await fetchData();
+      usedRealDataRef.current = true;
       setTimetableData(data);
+      saveCachedTimetableSnapshot(data);
       setLastUpdated(new Date());
       setNow(Date.now());
       setRefreshError(false);
@@ -357,6 +924,114 @@ function App() {
     const intervalId = setInterval(getData, REFRESH_INTERVAL_MS);
     return () => clearInterval(intervalId);
   }, [getData]);
+
+  // A genuinely FIRST-EVER open (no localStorage cache yet, so `status`
+  // started 'loading' above) falls back to a small build-time snapshot
+  // (`public/timetable-snapshot.json`, regenerated by every production
+  // build — see scripts/generate-timetable-snapshot.mjs) instead of
+  // sitting on the loading skeleton for the real fetch's full multi-
+  // request round trip (2026-09-15, on request: "make it so the pwa...
+  // opens instant and shows timetable without any delay"). This is a
+  // SEPARATE mechanism from the localStorage cache above — that one only
+  // helps a RETURNING visit; this one is what makes the very first install
+  // fast too. `usedRealDataRef` (set synchronously the instant `getData`'s
+  // real fetch actually succeeds, not via a state read that could still be
+  // one render behind) is the race guard: if the real, live fetch already
+  // won by the time this resolves, the stale bootstrap snapshot is
+  // silently discarded rather than clobbering fresher real data — and even
+  // in the rare case this loses that race anyway, the next real fetch
+  // self-corrects within a render or two, same as any other stale-briefly
+  // cache in this app. Deliberately does NOT write to
+  // `cachedTimetableData` — only the real fetch is trusted to update that,
+  // so `lastUpdated` never claims a bootstrap snapshot's build time is
+  // "when this was last refreshed."
+  const usedRealDataRef = useRef(false);
+  useEffect(() => {
+    if (hasDataRef.current) return; // a localStorage cache already covered this
+    fetch('/timetable-snapshot.json')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((snapshot) => {
+        if (!snapshot || usedRealDataRef.current) return;
+        if (!Array.isArray(snapshot.timetable) || snapshot.timetable.length === 0) return;
+        setTimetableData(snapshot);
+        setStatus('ready');
+      })
+      .catch(() => {
+        /* no snapshot shipped with this build, or offline before even that
+           could load — the normal loading-skeleton/error path still covers
+           it via the real fetch above */
+      });
+  }, []);
+
+  // Refetch the instant real connectivity returns (2026-09-14, on request:
+  // the timetable data should work fully offline — via the localStorage
+  // snapshot hydration in `timetableData`'s own initial state above — "and
+  // updates normally as it gets online"). Without this, a device that went
+  // offline mid-session would otherwise just sit on stale data until the
+  // next hourly `REFRESH_INTERVAL_MS` tick or a manual Refresh press, which
+  // could be up to an hour of staleness for something that's actually
+  // available again immediately. `navigator.onLine` flipping to `true`
+  // doesn't guarantee the network is fully usable yet (a captive portal,
+  // say) — `getData()` already handles a still-failing fetch gracefully
+  // (keeps showing cached data, flags `refreshError`), so firing eagerly
+  // here is safe even if the "online" event fires a beat early.
+  useEffect(() => {
+    window.addEventListener('online', getData);
+    return () => window.removeEventListener('online', getData);
+  }, [getData]);
+
+  // "Install app" card's button — shows Chrome/Edge/Android's native install
+  // dialog using the stashed `beforeinstallprompt` event. A captured event
+  // can only be prompted once; if the student dismisses it, `installPrompt`
+  // is cleared (the browser won't refire `beforeinstallprompt` for the same
+  // page load) and the card falls back to its "not available in this
+  // browser session" copy rather than showing a dead button. Accepting
+  // doesn't need to touch `showInstallCard` here — the `appinstalled`
+  // listener above handles hiding the card once the install actually
+  // completes, which is the more reliable signal than the prompt's own
+  // "accepted" outcome (a user can accept the dialog and still have the
+  // install itself fail).
+  const handleInstallClick = useCallback(async () => {
+    if (!installPrompt) return;
+    installPrompt.prompt();
+    await installPrompt.userChoice;
+    setInstallPrompt(null);
+  }, [installPrompt]);
+
+  // Reset every "Adjust class times" override — across ALL profiles, not
+  // just whichever one is currently open — the moment the master sheet's
+  // own content genuinely changes (2026-09-10, on request). An override is
+  // a correction against the OLD official schedule ("my class moved to X
+  // because the shared sheet hasn't caught up yet"); once the sheet DOES
+  // change, a stale override could now be moving an already-correct class
+  // to the wrong place instead. Deliberately keyed off the data's own
+  // content via `hashContent`, not merely "a fetch happened" — the hourly
+  // auto-refresh above re-fetches identical data far more often than the
+  // sheet actually changes, and resetting on every routine refetch would
+  // silently wipe a student's real, still-valid overrides. The very first
+  // time this check ever runs (no stored signature yet) just records it
+  // without resetting anything, so shipping this doesn't wipe existing
+  // overrides for everyone already using the app.
+  useEffect(() => {
+    if (!timetableData?.timetable) return;
+    const signature = hashContent(timetableData.timetable);
+    let stored;
+    try {
+      stored = localStorage.getItem(TIMETABLE_SIGNATURE_KEY);
+    } catch {
+      return;
+    }
+    if (stored === signature) return;
+    try {
+      localStorage.setItem(TIMETABLE_SIGNATURE_KEY, signature);
+      if (stored !== null) {
+        ALL_OVERRIDE_PROFILES.forEach((profile) => localStorage.removeItem(getOverrideStorageKey(profile)));
+      }
+    } catch {
+      /* storage unavailable */
+    }
+    if (stored !== null) setOverrides([]);
+  }, [timetableData]);
 
   // Keep the "updated X min ago" label fresh.
   useEffect(() => {
@@ -655,6 +1330,31 @@ function App() {
 
                   <div className="menu-divider" role="separator" />
 
+                  {/* The sign-IN prompt itself now lives in its own top-of-page banner
+                      (see "signin-banner" above the disclaimer, 2026-09-15) — this stays
+                      only for managing an ALREADY-signed-in account (identity + sign out),
+                      so there's nothing to show here at all while signed out. */}
+                  {authChecked && account && (
+                    <>
+                      <div className="menu-item menu-item-static" role="none">
+                        {account.user.picture ? (
+                          <img src={account.user.picture} alt="" className="menu-avatar" referrerPolicy="no-referrer" />
+                        ) : (
+                          <IconUser size={16} />
+                        )}
+                        <span>
+                          {account.user.name}
+                          <small>Classes sync automatically across your devices</small>
+                        </span>
+                      </div>
+                      <button type="button" role="menuitem" className="menu-item" onClick={handleGoogleSignOut}>
+                        <IconLogOut size={16} />
+                        <span>Sign out</span>
+                      </button>
+                      <div className="menu-divider" role="separator" />
+                    </>
+                  )}
+
                   <a
                     role="menuitem"
                     className="menu-item"
@@ -723,10 +1423,16 @@ function App() {
             {refreshError && (
               <div className="alert-bar no-print" role="status">
                 <IconAlert size={15} />
-                <span>Couldn’t refresh just now — showing the last loaded data.</span>
-                <button type="button" className="link-button" onClick={getData}>
-                  Retry
-                </button>
+                <span>
+                  {isOffline
+                    ? "You're offline — showing your last saved schedule. It'll update automatically once you're back online."
+                    : 'Couldn’t refresh just now — showing the last loaded data.'}
+                </span>
+                {!isOffline && (
+                  <button type="button" className="link-button" onClick={getData}>
+                    Retry
+                  </button>
+                )}
               </div>
             )}
 
@@ -774,6 +1480,91 @@ function App() {
                   Dismiss
                 </button>
               </div>
+            )}
+
+            {accountNotice && (
+              <div
+                className={`alert-bar no-print ${accountNotice.state === 'signed-in' ? 'alert-bar-info' : ''}`}
+                role="status"
+              >
+                {accountNotice.state === 'signed-in' ? <IconUser size={15} /> : <IconAlert size={15} />}
+                <span>{accountNotice.message}</span>
+                <button type="button" className="link-button" onClick={() => setAccountNotice(null)}>
+                  Got it
+                </button>
+              </div>
+            )}
+
+            {/* Sign-in prompt moved here from inside the Settings menu (2026-09-15, on
+                request: "make the sign in appear at top in beginning") — the very first
+                thing on the page, above even the disclaimer, while signed out; hides
+                itself the moment `account` is set, same "stays up until done, no manual
+                dismiss" pattern as the install-app card below. Once signed in, account
+                status/sign-out stays in the Settings menu — this banner's only job is the
+                initial prompt, not ongoing account management. `authChecked` gates it so
+                it doesn't flash for the ~one network round trip the initial session check
+                takes on every load. */}
+            {authChecked && !account && (
+              <section className="card signin-banner no-print" aria-label="Sign in with Google">
+                <IconUser size={16} className="signin-banner-icon" />
+                <span className="signin-banner-text">Sign in to sync your classes across devices</span>
+                <GoogleSignInButton onCredential={handleGoogleCredential} />
+              </section>
+            )}
+
+            {/* Shown in place of the login banner once signed in with anything OTHER
+                than a FAST NU student email (2026-09-16, on request: "the ones loging
+                in from other emails should always have message at top(in place of
+                login)") — `isNuEmail`/`getRollNoFromNuEmail` (utils/nuEmail.js) parse
+                the "k<YY><NNNN>@nu.edu.pk" format FAST NU issues, which also encodes
+                the student's own roll number (see the auto-sync effect below). A real
+                FAST NU email hides this AND the login banner entirely — from then on,
+                account state lives only in the Settings menu (identity + sign out),
+                same "login goes to settings" pattern as any other signed-in account. */}
+            {authChecked && account && !isNuEmail(account.user.email) && (
+              <section
+                className="card signin-banner signin-banner-warning no-print"
+                aria-label="Signed in with a non-FAST-NU email"
+              >
+                <IconAlert size={16} className="signin-banner-icon" />
+                <span className="signin-banner-text">Login from FAST NU Email</span>
+              </section>
+            )}
+
+            {/* Moved here from ClassSelector.jsx (2026-09-14, on request: "disclamer
+                should be above download") — the install card sits between this and
+                "My classes," so the disclaimer had to move up a level to stay above it. */}
+            <div className="data-disclaimer no-print" role="note">
+              <IconAlert size={15} />
+              <span>
+                This is an unofficial tool maintained independently by a student. Since data is
+                updated manually, please cross-verify your schedule with official university
+                announcements.
+              </span>
+            </div>
+
+            {showInstallCard && (
+              <section className="card install-card no-print" aria-label="Install the app">
+                <IconDownload size={16} className="install-card-icon" />
+                {isIOS() ? (
+                  <span className="install-card-text">
+                    Tap Share, then <strong>Add to Home Screen</strong>
+                  </span>
+                ) : (
+                  <>
+                    <span className="install-card-text">Install for quick access</span>
+                    <button
+                      type="button"
+                      className="btn btn-primary install-card-btn"
+                      onClick={handleInstallClick}
+                      disabled={!installPrompt}
+                      title={!installPrompt ? 'Not available in this browser session yet' : undefined}
+                    >
+                      Install
+                    </button>
+                  </>
+                )}
+              </section>
             )}
 
             <ClassSelector

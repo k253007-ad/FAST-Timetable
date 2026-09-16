@@ -78,3 +78,21 @@ export const withAlpha = (hex, alpha) => {
   const b = n & 255;
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 };
+
+// Fixed per-type colours for personal activities (ACTIVITY_TYPES in
+// schedule.js) — deliberately not derived from assignCourseColors above,
+// which only knows about real "Course - Section" selections. Shared by
+// TimetableGrid.jsx (the actual grid box) and ClassSelector.jsx (the
+// "Manage activities" time-slot picker, 2026-09-09) so an activity reads as
+// the same colour in both places — a custom (not-in-the-map) name falls
+// back to the same neutral slate everywhere.
+const ACTIVITY_COLORS = {
+  Library: '#0891b2',
+  Cafe: '#d97706',
+  Spot: '#65a30d',
+  Canteen: '#dc2626',
+  'Prayer/Namaz': '#7c3aed',
+  'Touch Grass': '#16a34a',
+};
+
+export const getActivityColor = (type) => ACTIVITY_COLORS[type] || '#64748b';

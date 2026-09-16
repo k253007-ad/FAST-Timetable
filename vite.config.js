@@ -15,6 +15,10 @@ const { default: subscribeHandler } = await import('./api/subscribe.js')
 const { default: notifyTickHandler } = await import('./api/notify-tick.js')
 const { default: calendarSubscribeHandler } = await import('./api/calendar-subscribe.js')
 const { default: calendarIcsHandler } = await import('./api/calendar.ics.js')
+const { default: authGoogleHandler } = await import('./api/auth-google.js')
+const { default: authSessionHandler } = await import('./api/auth-session.js')
+const { default: authLogoutHandler } = await import('./api/auth-logout.js')
+const { default: syncHandler } = await import('./api/sync.js')
 
 // Serves the same JSON as api/data.js so `npm run dev` doesn't need `vercel dev`.
 const apiDataMiddleware = () => ({
@@ -93,7 +97,19 @@ const apiCalendarMiddleware = () => ({
   }
 })
 
+// Google accounts / cross-device sync (added 2026-09-14) — see the
+// workspace-root CLAUDE.md's "Google accounts" section.
+const apiAuthMiddleware = () => ({
+  name: 'api-auth-middleware',
+  configureServer(server) {
+    server.middlewares.use('/api/auth-google', withVercelCompat(authGoogleHandler))
+    server.middlewares.use('/api/auth-session', withVercelCompat(authSessionHandler))
+    server.middlewares.use('/api/auth-logout', withVercelCompat(authLogoutHandler))
+    server.middlewares.use('/api/sync', withVercelCompat(syncHandler))
+  }
+})
+
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [react(), apiDataMiddleware(), apiPushMiddleware(), apiCalendarMiddleware()],
+  plugins: [react(), apiDataMiddleware(), apiPushMiddleware(), apiCalendarMiddleware(), apiAuthMiddleware()],
 })
