@@ -1422,6 +1422,36 @@ input.reschedule-select {
   letter-spacing: -0.01em;
 }
 
+.sessional1-card-note {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted, #64748b);
+}
+
+.sessional1-roll-form {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.sessional1-roll-form input {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 14px;
+}
+
+.confirm-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 14px;
+}
+
 .sessional1-card-time {
   flex-shrink: 0;
   font-size: 12px;

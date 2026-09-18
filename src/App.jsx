@@ -8,6 +8,7 @@ import {
   getSessional1Url,
   fetchSessional1,
   getSessional1Schedule,
+  getSessional1ForRollNo,
   groupSessional1ByDay,
   formatSessional1TimeRange,
   formatSessional1Date,
@@ -893,6 +894,20 @@ function App() {
     setLinkedSync({ ...linkedSync, lastLive: live });
   }, [timetableHash, rollNumbersHash, activeProfile, linkedSync]);
 
+  // Hard reset to exactly what the linked Roll No/Section has right now
+  // (discards manual additions/removals), re-baselining `lastLive`.
+  const handleResync = useCallback(() => {
+    const data = timetableDataRef.current;
+    if (!data || !linkedSync) return;
+    const live =
+      linkedSync.type === 'rollno'
+        ? getClassesForRollNo(data, linkedSync.value)
+        : getClassesForSection(data, linkedSync.value);
+    if (live === null) return;
+    setSelectedClasses(live);
+    setLinkedSync({ ...linkedSync, lastLive: live });
+  }, [linkedSync]);
+
   const switchProfile = useCallback((profile) => {
     setActiveProfile(profile);
     setSelectedClasses(getSavedClasses(profile));
@@ -1204,14 +1219,38 @@ function App() {
   // any other profile's — it has to be the specific roll number this
   // exact view's `selectedClasses` belongs to, or a mismatched seat could
   // get shown as if it were the viewer's own.
+  // Last resort: a roll number typed directly into the exam popup (device-
+  // wide convenience, localStorage) for students not signed in / not synced.
+  const [sessional1ManualRoll, setSessional1ManualRoll] = useState(() => {
+    try {
+      return localStorage.getItem('sessional1ManualRoll') || '';
+    } catch {
+      return '';
+    }
+  });
+  const [sessional1RollInput, setSessional1RollInput] = useState('');
+  const submitSessional1Roll = (e) => {
+    e.preventDefault();
+    const v = sessional1RollInput.trim().toUpperCase();
+    if (!/^\d{2}K-\d{4}$/.test(v)) return;
+    setSessional1ManualRoll(v);
+    setSessional1RollInput('');
+    try {
+      localStorage.setItem('sessional1ManualRoll', v);
+    } catch {
+      // storage blocked — still works for this session.
+    }
+  };
   const sessional1KnownRollNo = useMemo(() => {
+    // A roll number typed into the popup wins — it's an explicit choice.
+    if (sessional1ManualRoll) return sessional1ManualRoll;
     if (account?.user?.email) {
       const rollNo = getRollNoFromNuEmail(account.user.email);
       if (rollNo) return rollNo;
     }
     if (linkedSync?.type === 'rollno' && linkedSync.value) return linkedSync.value;
     return null;
-  }, [account, linkedSync]);
+  }, [account, linkedSync, sessional1ManualRoll]);
 
   // Only classes with a real Sessional-1 match, in exam chronological order
   // — not course-name/selection order (2026-09-18, on request: "the
@@ -1219,8 +1258,20 @@ function App() {
   // exam is in order not course name order, time order").
   const sessional1Matches = useMemo(() => {
     if (!sessional1Entries) return [];
+    if (sessional1KnownRollNo) {
+      const own = getSessional1ForRollNo(sessional1Entries, sessional1KnownRollNo);
+      if (own.length > 0) return own;
+    }
     return getSessional1Schedule(sessional1Entries, selectedClasses, sessional1KnownRollNo);
   }, [sessional1Entries, selectedClasses, sessional1KnownRollNo]);
+
+  // Colours for the exam cards: selected-class colours where they exist,
+  // otherwise a stable colour assigned over the exam list itself (a
+  // roll-number-driven list can include courses that aren't selected).
+  const sessional1Colors = useMemo(
+    () => ({ ...assignCourseColors(sessional1Matches.map((m) => m.classKey)), ...courseColors }),
+    [sessional1Matches, courseColors]
+  );
 
   // Grouped by exam day for the redesigned card layout (2026-09-18, on
   // request: "polish the exam timetable and make it visually beautifull
@@ -1697,6 +1748,18 @@ function App() {
                   )}
                   {sessional1Status === 'ready' && (
                     <>
+                      <form className="sessional1-roll-form" onSubmit={submitSessional1Roll}>
+                        <input
+                          value={sessional1RollInput}
+                          onChange={(e) => setSessional1RollInput(e.target.value)}
+                          placeholder={sessional1KnownRollNo ? `Showing ${sessional1KnownRollNo} — change roll no` : 'Your roll no, e.g. 25K-3068'}
+                          aria-label="Roll number"
+                          maxLength={8}
+                        />
+                        <button type="submit" className="action-btn-blue">
+                          Show
+                        </button>
+                      </form>
                       <div ref={sessional1CaptureRef} className="sessional1-capture">
                         <div className="sessional1-capture-head">
                           <h4 className="sessional1-capture-title">Sessional-1 Seatings</h4>
@@ -1716,8 +1779,8 @@ function App() {
                           <>
                             {!sessional1KnownRollNo && (
                               <p className="sessional1-seat-hint">
-                                Room &amp; seat vary per student — sign in with your FAST NU email, or
-                                sync your Roll No (Roll No mode in My classes), to see your exact seat.
+                                Room &amp; seat vary per student — enter your roll number below (or sign
+                                in with your FAST NU email / sync Roll No) to see your exact exams and seat.
                               </p>
                             )}
                             {sessional1Groups.map((group) => (
@@ -1733,7 +1796,7 @@ function App() {
                                   )}
                                 </div>
                                 {group.items.map((m) => {
-                                  const color = courseColors[m.course] || '#64748b';
+                                  const color = sessional1Colors[m.course] || '#64748b';
                                   return (
                                     <div
                                       key={m.classKey}
@@ -1749,6 +1812,9 @@ function App() {
                                             {m.entry.room}
                                             {m.entry.seat ? ` · Seat ${m.entry.seat}` : ''}
                                           </span>
+                                        )}
+                                        {m.entry.room && !m.entry.seat && /lab/i.test(m.entry.room) && (
+                                          <span className="sessional1-card-note">Lab has no seat no.</span>
                                         )}
                                       </div>
                                       <span
@@ -1821,6 +1887,7 @@ function App() {
               onSwitchProfile={switchProfile}
               linkedSync={linkedSync}
               setLinkedSync={setLinkedSync}
+              onResync={handleResync}
             />
 
             <NowNext

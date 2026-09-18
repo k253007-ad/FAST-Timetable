@@ -697,7 +697,9 @@ const ClassSelector = ({
   onSwitchProfile,
   linkedSync,
   setLinkedSync,
+  onResync,
 }) => {
+  const [confirmAction, setConfirmAction] = useState(null); // 'clear' | 'resync' | null
   const [mode, setMode] = useState('rollno'); // 'rollno' | 'teacher' | 'section' — see the doc comment above re: 'manual'
   const [query, setQuery] = useState('');
   const [groupQuery, setGroupQuery] = useState(''); // shared search box for roll no / teacher / section tabs
@@ -1203,12 +1205,45 @@ const ClassSelector = ({
         {selectedClasses.length > 0 && (
           <span className="count-pill">{selectedClasses.length} selected</span>
         )}
+        {linkedSync && (
+          <button type="button" className="link-button" onClick={() => setConfirmAction('resync')}>
+            Resync
+          </button>
+        )}
         {selectedClasses.length > 0 && (
-          <button type="button" className="link-button" onClick={() => setSelectedClasses([])}>
+          <button type="button" className="link-button" onClick={() => setConfirmAction('clear')}>
             Clear all
           </button>
         )}
       </div>
+      {confirmAction && (
+        <Modal
+          title={confirmAction === 'clear' ? 'Clear all classes?' : 'Resync classes?'}
+          onClose={() => setConfirmAction(null)}
+        >
+          <p>
+            {confirmAction === 'clear'
+              ? `This removes all ${selectedClasses.length} selected classes from this timetable.`
+              : `This resets your classes to exactly what ${linkedSync?.type === 'rollno' ? 'Roll No' : 'Section'} ${linkedSync?.value} has now. Courses you added or removed by hand will be undone.`}
+          </p>
+          <div className="confirm-actions">
+            <button type="button" className="action-btn" onClick={() => setConfirmAction(null)}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="action-btn-blue"
+              onClick={() => {
+                if (confirmAction === 'clear') setSelectedClasses([]);
+                else onResync?.();
+                setConfirmAction(null);
+              }}
+            >
+              {confirmAction === 'clear' ? 'Clear all' : 'Resync'}
+            </button>
+          </div>
+        </Modal>
+      )}
 
       <div className="selector-toolbar">
         <div className="toolbar-secondary">

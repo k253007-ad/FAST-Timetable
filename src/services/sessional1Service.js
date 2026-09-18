@@ -291,6 +291,31 @@ export const getSessional1Schedule = (rows, selectedClasses, knownRollNo) => {
 };
 
 /**
+ * Roll-number-driven schedule (2026-09-19, on request: "make sessional
+ * timetable based on roll no"): when the viewer's roll number is known, the
+ * exam list is simply THAT student's own rows from the seating plan — no
+ * dependence on which classes happen to be selected, so it can't miss or
+ * add courses. Same `{ classKey, course, section, entry }` shape and sort
+ * order as `getSessional1Schedule`, so the UI renders both identically.
+ */
+export const getSessional1ForRollNo = (rows, rollNo) =>
+  rows
+    .filter((r) => r.rollNo === rollNo)
+    .map((r) => {
+      const course = canonicalCourseName(r.name);
+      return {
+        classKey: `${course} - ${r.section}`,
+        course,
+        section: r.section,
+        entry: { day: r.day, date: r.date, time: r.time, room: r.room, seat: r.seat, teacher: r.teacher },
+      };
+    })
+    .sort((a, b) => {
+      if (a.entry.date !== b.entry.date) return a.entry.date < b.entry.date ? -1 : 1;
+      return timeToMinutes(a.entry.time) - timeToMinutes(b.entry.time);
+    });
+
+/**
  * Groups an already-sorted `getSessional1Schedule` result by exam date —
  * `[{ date, day, isToday, isTomorrow, items }]`, in the same chronological
  * order. `todayISO` is the caller's current date (Asia/Karachi, since
