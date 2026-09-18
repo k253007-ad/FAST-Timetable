@@ -1429,9 +1429,52 @@ input.reschedule-select {
 }
 
 .sessional1-roll-form {
+  position: relative;
   display: flex;
   gap: 8px;
   margin-bottom: 10px;
+}
+
+.sessional1-roll-list {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 5;
+  max-height: 220px;
+  overflow-y: auto;
+  margin-top: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
+}
+
+.sessional1-roll-option {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 9px 12px;
+  background: none;
+  border: 0;
+  color: var(--text);
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.sessional1-roll-option:hover,
+.sessional1-roll-option.is-active {
+  background: rgba(37, 99, 235, 0.1);
+}
+
+.sessional1-roll-pill {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid #94a3b8;
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .sessional1-roll-form input {

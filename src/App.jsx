@@ -1229,18 +1229,33 @@ function App() {
     }
   });
   const [sessional1RollInput, setSessional1RollInput] = useState('');
-  const submitSessional1Roll = (e) => {
-    e.preventDefault();
-    const v = sessional1RollInput.trim().toUpperCase();
+  const [sessional1RollOpen, setSessional1RollOpen] = useState(false);
+  const chooseSessional1Roll = (value) => {
+    const v = value.trim().toUpperCase();
     if (!/^\d{2}K-\d{4}$/.test(v)) return;
     setSessional1ManualRoll(v);
     setSessional1RollInput('');
+    setSessional1RollOpen(false);
     try {
       localStorage.setItem('sessional1ManualRoll', v);
     } catch {
       // storage blocked — still works for this session.
     }
   };
+  const submitSessional1Roll = (e) => {
+    e.preventDefault();
+    chooseSessional1Roll(sessional1RollInput);
+  };
+  // Every real roll number in the seating plan, for the search dropdown.
+  const sessional1RollList = useMemo(
+    () => (sessional1Entries ? [...new Set(sessional1Entries.map((r) => r.rollNo))].sort() : []),
+    [sessional1Entries]
+  );
+  const sessional1RollMatches = useMemo(() => {
+    const q = sessional1RollInput.trim().toUpperCase();
+    const list = q ? sessional1RollList.filter((r) => r.includes(q)) : sessional1RollList;
+    return list.slice(0, 40);
+  }, [sessional1RollList, sessional1RollInput]);
   const sessional1KnownRollNo = useMemo(() => {
     // A roll number typed into the popup wins — it's an explicit choice.
     if (sessional1ManualRoll) return sessional1ManualRoll;
@@ -1737,7 +1752,7 @@ function App() {
             )}
 
             {sessional1Open && (
-              <Modal title="Sessional-1 Seatings" onClose={() => setSessional1Open(false)}>
+              <Modal title={sessional1KnownRollNo ? `Sessional-1 Seatings · ${sessional1KnownRollNo}` : "Sessional-1 Seatings"} onClose={() => setSessional1Open(false)}>
                 <div className="sessional1-modal-body">
                   {sessional1Status === 'loading' && <p className="sessional1-status">Loading Sessional-1 schedule…</p>}
                   {sessional1Status === 'error' && (
@@ -1751,18 +1766,41 @@ function App() {
                       <form className="sessional1-roll-form" onSubmit={submitSessional1Roll}>
                         <input
                           value={sessional1RollInput}
-                          onChange={(e) => setSessional1RollInput(e.target.value)}
-                          placeholder={sessional1KnownRollNo ? `Showing ${sessional1KnownRollNo} — change roll no` : 'Your roll no, e.g. 25K-3068'}
+                          onChange={(e) => {
+                            setSessional1RollInput(e.target.value);
+                            setSessional1RollOpen(true);
+                          }}
+                          onFocus={() => setSessional1RollOpen(true)}
+                          onBlur={() => setTimeout(() => setSessional1RollOpen(false), 150)}
+                          placeholder={sessional1KnownRollNo ? `Showing ${sessional1KnownRollNo} — search roll no` : 'Search roll no, e.g. 25K-3068'}
                           aria-label="Roll number"
+                          autoComplete="off"
                           maxLength={8}
                         />
-                        <button type="submit" className="action-btn-blue">
-                          Show
-                        </button>
+                        {sessional1RollOpen && sessional1RollMatches.length > 0 && (
+                          <div className="sessional1-roll-list" role="listbox">
+                            {sessional1RollMatches.map((r) => (
+                              <button
+                                type="button"
+                                key={r}
+                                role="option"
+                                className={`sessional1-roll-option${r === sessional1KnownRollNo ? ' is-active' : ''}`}
+                                onMouseDown={(e) => e.preventDefault()}
+                                onClick={() => chooseSessional1Roll(r)}
+                              >
+                                {r}
+                              </button>
+                            ))}
+                          </div>
+                        )}
                       </form>
                       <div ref={sessional1CaptureRef} className="sessional1-capture">
                         <div className="sessional1-capture-head">
-                          <h4 className="sessional1-capture-title">Sessional-1 Seatings</h4>
+                          <h4 className="sessional1-capture-title">
+                            Sessional-1 Seatings
+                            {sessional1KnownRollNo && <span className="sessional1-roll-pill">{sessional1KnownRollNo}</span>}
+                            {sessional1KnownRollNo && <span className="sessional1-roll-pill">Seat no not given</span>}
+                          </h4>
                           {sessional1Matches.length > 0 && (
                             <span className="sessional1-capture-count">
                               {sessional1Matches.length} exam{sessional1Matches.length === 1 ? '' : 's'}
@@ -1779,8 +1817,8 @@ function App() {
                           <>
                             {!sessional1KnownRollNo && (
                               <p className="sessional1-seat-hint">
-                                Room &amp; seat vary per student — enter your roll number below (or sign
-                                in with your FAST NU email / sync Roll No) to see your exact exams and seat.
+                                Room varies per student — enter your roll number below (or sign
+                                in with your FAST NU email / sync Roll No) to see your exact exams and room.
                               </p>
                             )}
                             {sessional1Groups.map((group) => (
@@ -1810,7 +1848,7 @@ function App() {
                                         {m.entry.room && (
                                           <span className="sessional1-card-seat">
                                             {m.entry.room}
-                                            {m.entry.seat ? ` · Seat ${m.entry.seat}` : ''}
+                                            {m.entry.seat || ''}
                                           </span>
                                         )}
                                         {m.entry.room && !m.entry.seat && /lab/i.test(m.entry.room) && (
