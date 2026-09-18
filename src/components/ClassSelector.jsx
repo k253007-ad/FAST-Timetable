@@ -282,7 +282,7 @@ const ActivityTypeDropdown = ({ builtIns, customTypes, activityType, isCustomAct
 // `position: fixed` div nested deep in the card could otherwise hit).
 // Replaces the separate per-section (i) Info popovers, which were dropped
 // as part of the same request.
-const Modal = ({ title, onBack, onClose, children }) => {
+export const Modal = ({ title, onBack, onClose, children }) => {
   useEffect(() => {
     const onKeyDown = (e) => {
       if (e.key === 'Escape') onClose();

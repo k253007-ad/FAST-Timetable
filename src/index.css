@@ -1287,6 +1287,86 @@ input.reschedule-select {
   overflow-y: auto;
 }
 
+/* ---------- Sessional-1 seatings (2026-09-18) ---------- */
+/* The modal's own inner wrapper (Modal's `.modal-body` above already
+   handles the outer padding/scroll) — just a simple vertical stack of the
+   capture target + the Print button below it. */
+.sessional1-modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.sessional1-status {
+  font-size: 13px;
+  color: var(--text-2);
+  text-align: center;
+  padding: 12px 0;
+}
+
+/* The exact element html2canvas captures (see App.jsx's
+   `handleSessional1Print`, a dedicated ref separate from the main weekly-
+   grid export) — needs its own solid background since it's captured
+   standalone, not as part of the page's already-painted surface. */
+.sessional1-capture {
+  background: var(--surface);
+  padding: 4px 2px;
+}
+
+.sessional1-capture-title {
+  margin: 0 0 10px;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.sessional1-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+
+.sessional1-table th,
+.sessional1-table td {
+  text-align: left;
+  padding: 7px 8px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+.sessional1-table th:first-child,
+.sessional1-table td:first-child {
+  width: 18px;
+  padding-right: 0;
+}
+
+.sessional1-table th {
+  font-weight: 700;
+  color: var(--text-2);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.sessional1-color-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+
+.sessional1-print-btn {
+  align-self: flex-start;
+}
+
+@media (max-width: 560px) {
+  .sessional1-table {
+    display: block;
+    overflow-x: auto;
+  }
+}
+
 /* The one icon slot for a search box, always on the right: a plain search
    icon while idle, the same icon as a tappable "submit" button once typing
    (see SearchAction in ClassSelector.jsx), or a clear (X) button once

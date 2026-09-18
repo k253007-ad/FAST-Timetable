@@ -36,6 +36,18 @@ const DAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
 const ROLL_SHEET_ID = '1-OU7HxwLf7sIc-rtyCUB6Hf7SuMEvyZtD2stFv--DHM';
 const ROLL_SHEET_TAB = 'RollNumbers';
 
+// Sessional-1 exam seating schedule (added 2026-09-18) — a separate, one-off
+// spreadsheet built by extracting the university's own Sessional-1 exam
+// datesheet PDF (Fall 2026), one row per (Course, Section): Campus, Day,
+// Date, Time, Room, Course Code, Course Name, Section, All Sections (same
+// exam), Student Count, Invigilators. See src/services/sessional1Service.js
+// for the fetch/parse/match logic and App.jsx's "Sessional-1 seatings" card
+// for how it's surfaced — only shown through the last exam day, then hidden
+// automatically (no code change needed to "turn it off" after that date).
+// Same null-if-unset fallback convention as ROLL_SHEET_ID above.
+const SESSIONAL1_SHEET_ID = '1Vs5CpKRb_79c2g32kfq7uyhMec2v21kpz8dgjShxS_k';
+const SESSIONAL1_SHEET_TAB = 'Sessional1';
+
 const CACHE_MS = 10 * 60 * 1000; // re-check the tab list at most every 10 minutes
 let cache = null;
 let cacheAt = 0;
@@ -72,7 +84,7 @@ export async function getSheetData() {
   // (2026-09-14, part of a PWA-open-speed investigation) — the roll-number
   // check was always independent of the day-tab check, it just wasn't
   // written that way.
-  const [tabNames, rollTabResult] = await Promise.all([
+  const [tabNames, rollTabResult, sessional1TabResult] = await Promise.all([
     fetchTabNames(SHEET_ID),
     // Roll-number sheet check is best-effort and non-fatal: an unmatched
     // `sheet=` name silently falls back to gviz's first tab instead of
@@ -85,6 +97,13 @@ export async function getSheetData() {
     ROLL_SHEET_ID
       ? fetchTabNames(ROLL_SHEET_ID).catch((err) => {
           console.error('Could not verify roll-number sheet tab list:', err.message);
+          return null;
+        })
+      : Promise.resolve(null),
+    // Sessional-1 sheet check — same best-effort, non-fatal pattern.
+    SESSIONAL1_SHEET_ID
+      ? fetchTabNames(SESSIONAL1_SHEET_ID).catch((err) => {
+          console.error('Could not verify Sessional-1 sheet tab list:', err.message);
           return null;
         })
       : Promise.resolve(null),
@@ -112,11 +131,28 @@ export async function getSheetData() {
     }
   }
 
+  let sessional1 = null;
+  if (sessional1TabResult) {
+    const sessional1TabMatch = sessional1TabResult.find(
+      (name) => name.toLowerCase() === SESSIONAL1_SHEET_TAB.toLowerCase()
+    );
+    if (sessional1TabMatch) {
+      sessional1 = {
+        url: `https://docs.google.com/spreadsheets/d/${SESSIONAL1_SHEET_ID}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent(sessional1TabMatch)}`,
+      };
+    } else {
+      console.error(
+        `Sessional-1 sheet has no tab named "${SESSIONAL1_SHEET_TAB}". Tabs found: ${sessional1TabResult.join(', ')}`
+      );
+    }
+  }
+
   const data = {
     karachi: {
       url: `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&sheet=`,
       codes,
       rollNumbers,
+      sessional1,
     },
   };
   cache = data;

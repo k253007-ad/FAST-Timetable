@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import html2canvas from 'html2canvas';
 import TimetableGrid from './components/TimetableGrid.jsx';
-import ClassSelector from './components/ClassSelector.jsx';
+import ClassSelector, { Modal } from './components/ClassSelector.jsx';
 import NowNext from './components/NowNext.jsx';
 import { fetchData } from './services/dataService.js';
+import { getSessional1Url, fetchSessional1, getSessional1Schedule } from './services/sessional1Service.js';
 import { assignCourseColors } from './utils/courseColors.js';
 import {
   DAY_ORDER,
@@ -494,6 +495,20 @@ function App() {
   // downloads the app" — there's deliberately no manual close button.
   const [installPrompt, setInstallPrompt] = useState(null);
   const [showInstallCard, setShowInstallCard] = useState(() => !isRunningStandalone());
+  // Sessional-1 seatings (added 2026-09-18, on request: "make an option of
+  // print Sessional-1 Seatings which gives timetable of selected
+  // courses"). Time-boxed on purpose — the banner/button below only shows
+  // through the last exam day (see `sessional1WindowActive` near the JSX),
+  // then disappears on its own with no code change needed. Data is fetched
+  // LAZILY (only once the student actually opens the modal), not as part
+  // of the main load — see sessional1Service.js's own doc comment for why.
+  // `sessional1Entries` stays `null` until the first fetch attempt so a
+  // second open of the modal doesn't refetch.
+  const [sessional1Open, setSessional1Open] = useState(false);
+  const [sessional1Entries, setSessional1Entries] = useState(null);
+  const [sessional1Status, setSessional1Status] = useState('idle'); // idle | loading | ready | error
+  const [sessional1Exporting, setSessional1Exporting] = useState(false);
+  const sessional1CaptureRef = useRef(null);
   // Google accounts / cross-device sync (added 2026-09-14). `account` is
   // `null` while signed out, `{ user: { email, name, picture } }` once
   // signed in — deliberately never holds the raw synced `data` itself as
@@ -1144,6 +1159,75 @@ function App() {
   const canExport = status === 'ready' && selectedClasses.length > 0 && !exporting;
   const canSyncCalendar = status === 'ready';
 
+  // Sessional-1 seatings — opening the modal is what triggers the (lazy,
+  // one-time) fetch; a second open just reopens against the already-fetched
+  // `sessional1Entries`, no refetch. Deliberately reads `selectedClasses`
+  // (whichever profile is CURRENTLY ACTIVE), same as the main Print button
+  // above operates on whatever's on screen right now — not forced to Main
+  // like notifications/the calendar feed, since this isn't a background
+  // sync, it's "show me my seating for what I'm looking at."
+  const openSessional1 = useCallback(async () => {
+    setSessional1Open(true);
+    if (sessional1Entries !== null) return;
+    setSessional1Status('loading');
+    try {
+      const url = await getSessional1Url();
+      if (!url) {
+        setSessional1Status('error');
+        return;
+      }
+      const entries = await fetchSessional1(url);
+      setSessional1Entries(entries);
+      setSessional1Status('ready');
+    } catch (err) {
+      console.error('Failed to load Sessional-1 data:', err);
+      setSessional1Status('error');
+    }
+  }, [sessional1Entries]);
+
+  // Only classes with a real Sessional-1 match, in exam chronological order
+  // — not course-name/selection order (2026-09-18, on request: "the
+  // courses which data is not found should not show... make it so the
+  // exam is in order not course name order, time order").
+  const sessional1Matches = useMemo(() => {
+    if (!sessional1Entries) return [];
+    return getSessional1Schedule(sessional1Entries, selectedClasses);
+  }, [sessional1Entries, selectedClasses]);
+
+  // Own dedicated html2canvas capture (separate ref/target from the main
+  // weekly-grid export above) — the modal's content is portaled to
+  // `document.body` via `Modal`, so it needs its own ref rather than
+  // reusing `captureRef`, which stays pointed at the grid.
+  const handleSessional1Print = useCallback(async () => {
+    const element = sessional1CaptureRef.current;
+    if (!element || sessional1Exporting) return;
+    setSessional1Exporting(true);
+    try {
+      await document.fonts?.ready;
+      const surface = getComputedStyle(document.documentElement).getPropertyValue('--surface').trim();
+      const canvas = await html2canvas(element, { scale: 2, backgroundColor: surface || '#ffffff' });
+      const stamp = new Date().toISOString().slice(0, 10);
+      const link = document.createElement('a');
+      link.href = canvas.toDataURL('image/png', 0.95);
+      link.download = `Sessional1-Seatings_${stamp}.png`;
+      link.click();
+    } catch (err) {
+      console.error('Sessional-1 print failed:', err);
+    } finally {
+      setSessional1Exporting(false);
+    }
+  }, [sessional1Exporting]);
+
+  // Available through the last exam day (Wed 23 Sep 2026), then hides
+  // itself automatically the next day — no code change needed to "turn it
+  // off." Uses the existing `now` ticker (already re-rendered every 60s
+  // for the header's "synced Xm ago" text), so it genuinely disappears at
+  // midnight without needing a page reload. Karachi has no DST, fixed +5h
+  // year-round — same fact the server-side notification math already
+  // relies on (see notifyLogic.js).
+  const SESSIONAL1_CUTOFF_MS = useMemo(() => new Date('2026-09-24T00:00:00+05:00').getTime(), []);
+  const sessional1WindowActive = now < SESSIONAL1_CUTOFF_MS;
+
   // null | { state: 'success' | 'empty' | 'error' }
   const [calendarNotice, setCalendarNotice] = useState(null);
   const [calendarSyncing, setCalendarSyncing] = useState(false);
@@ -1542,6 +1626,89 @@ function App() {
                 announcements.
               </span>
             </div>
+
+            {/* Sessional-1 seatings (added 2026-09-18, on request: "make an option of
+                print Sessional-1 Seatings which gives timetable of selected courses" —
+                placed "below disclaimer", per the same request). Time-boxed on purpose
+                ("it will be avalible till 23 sept wednesday, after wednesday it will
+                dissapear") via `sessional1WindowActive` — no manual cleanup needed once
+                exams are over, it just stops rendering on its own past the cutoff. */}
+            {sessional1WindowActive && (
+              <section className="card signin-banner no-print" aria-label="Sessional-1 exam seatings">
+                <IconPrinter size={16} className="signin-banner-icon" />
+                <span className="signin-banner-text">Sessional-1 exams: Sat 19 – Wed 23 Sep</span>
+                <button type="button" className="btn btn-primary install-card-btn" onClick={openSessional1}>
+                  Print Sessional-1 Seatings
+                </button>
+              </section>
+            )}
+
+            {sessional1Open && (
+              <Modal title="Sessional-1 Seatings" onClose={() => setSessional1Open(false)}>
+                <div className="sessional1-modal-body">
+                  {sessional1Status === 'loading' && <p className="sessional1-status">Loading Sessional-1 schedule…</p>}
+                  {sessional1Status === 'error' && (
+                    <p className="sessional1-status">
+                      Couldn&rsquo;t load the Sessional-1 schedule right now — check your connection and try
+                      again.
+                    </p>
+                  )}
+                  {sessional1Status === 'ready' && (
+                    <>
+                      <div ref={sessional1CaptureRef} className="sessional1-capture">
+                        <h4 className="sessional1-capture-title">Sessional-1 Seatings</h4>
+                        {sessional1Matches.length === 0 ? (
+                          <p className="sessional1-status">
+                            {selectedClasses.length === 0
+                              ? 'No classes selected yet — pick your courses first, then reopen this.'
+                              : 'None of your selected courses have a Sessional-1 exam on record.'}
+                          </p>
+                        ) : (
+                          <table className="sessional1-table">
+                            <thead>
+                              <tr>
+                                <th aria-hidden="true"></th>
+                                <th>Course</th>
+                                <th>Section</th>
+                                <th>Day &amp; Date</th>
+                                <th>Time</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {sessional1Matches.map((m) => (
+                                <tr key={m.classKey}>
+                                  <td>
+                                    <span
+                                      className="sessional1-color-dot"
+                                      style={{ backgroundColor: courseColors[m.course] || '#64748b' }}
+                                    />
+                                  </td>
+                                  <td>{m.course}</td>
+                                  <td>{m.section}</td>
+                                  <td>
+                                    {m.entry.day}, {m.entry.date}
+                                  </td>
+                                  <td>{m.entry.time}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        className="btn btn-primary sessional1-print-btn"
+                        onClick={handleSessional1Print}
+                        disabled={sessional1Exporting || sessional1Matches.length === 0}
+                      >
+                        <IconPrinter size={16} />
+                        {sessional1Exporting ? 'Printing…' : 'Print / Download'}
+                      </button>
+                    </>
+                  )}
+                </div>
+              </Modal>
+            )}
 
             {showInstallCard && (
               <section className="card install-card no-print" aria-label="Install the app">
