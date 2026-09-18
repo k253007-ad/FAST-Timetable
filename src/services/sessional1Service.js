@@ -119,22 +119,58 @@ export const matchSessional1 = (entries, selectedClasses) => {
   });
 };
 
-// Extracts the first clock time in a Sessional-1 `time` string and converts
-// it to minutes-since-midnight, for chronological sorting. Handles both
-// formats this sheet actually contains: bare "HH:MM-HH:MM" (Main Campus —
-// same "no AM/PM, hours under 7 mean afternoon" dirty-data convention the
-// weekly timetable's own `toMinutes` already relies on, schedule.js) and
-// explicit "HH:MM A.M./P.M." (Senior City Campus).
-const timeToMinutes = (timeStr) => {
-  const m = (timeStr || '').match(/(\d{1,2}):(\d{2})/);
-  if (!m) return 0;
-  let hours = Number(m[1]);
-  const minutes = Number(m[2]);
+// Extracts every clock time found in a Sessional-1 `time` string and
+// converts each to minutes-since-midnight — used both for chronological
+// sorting (just the first/start time) and for clean AM/PM display (start
+// AND end). Handles both formats this sheet actually contains: bare
+// "HH:MM-HH:MM" (Main Campus — same "no AM/PM, hours under 7 mean
+// afternoon" dirty-data convention the weekly timetable's own `toMinutes`
+// already relies on, schedule.js) and explicit "HH:MM A.M./P.M." (Senior
+// City Campus) — the AM/PM markers, when present, always win over the
+// hours-under-7 heuristic.
+const parseTimeRangeMinutes = (timeStr) => {
   const isPM = /P\.?M\.?/i.test(timeStr);
   const isAM = /A\.?M\.?/i.test(timeStr);
-  if (isPM && hours < 12) hours += 12;
-  else if (!isAM && !isPM && hours < 7) hours += 12;
-  return hours * 60 + minutes;
+  return [...(timeStr || '').matchAll(/(\d{1,2}):(\d{2})/g)].map(([, h, m]) => {
+    let hours = Number(h);
+    if (isPM && hours < 12) hours += 12;
+    else if (!isAM && !isPM && hours < 7) hours += 12;
+    return hours * 60 + Number(m);
+  });
+};
+
+const timeToMinutes = (timeStr) => parseTimeRangeMinutes(timeStr)[0] ?? 0;
+
+const minutesToClock = (mins) => {
+  const h = Math.floor(mins / 60) % 24;
+  const m = mins % 60;
+  const period = h >= 12 ? 'PM' : 'AM';
+  const h12 = h % 12 || 12;
+  return `${h12}:${String(m).padStart(2, '0')} ${period}`;
+};
+
+/**
+ * Reconstructs a clean, unambiguous "8:30 AM – 9:30 AM" range from whatever
+ * this sheet's own `time` string looks like — added 2026-09-18 (on request:
+ * "polish the exam timetable and make it visually beautifull and easy to
+ * understand") specifically because the raw Main Campus format
+ * ("01:00-02:00") reads as ambiguous/wrong at a glance without knowing the
+ * sheet's own "under 7 means afternoon" convention; this makes that
+ * explicit instead of leaving the student to work it out. Falls back to
+ * the raw string untouched if it doesn't contain two parseable times,
+ * rather than risk mangling an unexpected format.
+ */
+export const formatSessional1TimeRange = (timeStr) => {
+  const [start, end] = parseTimeRangeMinutes(timeStr);
+  if (start === undefined || end === undefined) return timeStr;
+  return `${minutesToClock(start)} – ${minutesToClock(end)}`;
+};
+
+/** "2026-09-19" -> "Sep 19, 2026" (falls back to the raw string if unparseable). */
+export const formatSessional1Date = (dateStr) => {
+  const d = new Date(`${dateStr}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return dateStr;
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 };
 
 /**
@@ -152,4 +188,39 @@ export const getSessional1Schedule = (entries, selectedClasses) => {
       if (a.entry.date !== b.entry.date) return a.entry.date < b.entry.date ? -1 : 1;
       return timeToMinutes(a.entry.time) - timeToMinutes(b.entry.time);
     });
+};
+
+/**
+ * Groups an already-sorted `getSessional1Schedule` result by exam date —
+ * `[{ date, day, isToday, isTomorrow, items }]`, in the same chronological
+ * order. `todayISO` is the caller's current date (Asia/Karachi, since
+ * that's the calendar the sheet's own dates are in — same fixed +5h
+ * convention `notifyLogic.js` already relies on) as "YYYY-MM-DD", used
+ * only to flag "Today"/"Tomorrow" — a real, useful cue given exams are
+ * imminent, not decorative.
+ */
+export const groupSessional1ByDay = (schedule, todayISO) => {
+  const groups = [];
+  let current = null;
+  // Deliberately Date.UTC (not `new Date(\`${todayISO}T00:00:00\`)`, which
+  // parses as LOCAL time) — mixing a local-parsed Date with `toISOString`'s
+  // always-UTC read-back is exactly the kind of off-by-one bug this hit
+  // once already: on a machine whose system timezone happens to already be
+  // Asia/Karachi (UTC+5), any `todayISO` before ~05:00 local would parse as
+  // local midnight, land at 19:00 UTC the PREVIOUS day, and the +24h/
+  // toISOString round trip would land back on today's date instead of
+  // tomorrow's. `Date.UTC` builds midnight UTC for that Y-M-D directly, so
+  // the whole +1-day/toISOString round trip stays UTC-to-UTC throughout,
+  // with no local-timezone step to introduce ambiguity.
+  const [y, mo, d] = todayISO.split('-').map(Number);
+  const tomorrowISO = new Date(Date.UTC(y, mo - 1, d) + 86400000).toISOString().slice(0, 10);
+  for (const m of schedule) {
+    const { date, day } = m.entry;
+    if (!current || current.date !== date) {
+      current = { date, day, isToday: date === todayISO, isTomorrow: date === tomorrowISO, items: [] };
+      groups.push(current);
+    }
+    current.items.push(m);
+  }
+  return groups;
 };

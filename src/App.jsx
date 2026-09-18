@@ -4,8 +4,15 @@ import TimetableGrid from './components/TimetableGrid.jsx';
 import ClassSelector, { Modal } from './components/ClassSelector.jsx';
 import NowNext from './components/NowNext.jsx';
 import { fetchData } from './services/dataService.js';
-import { getSessional1Url, fetchSessional1, getSessional1Schedule } from './services/sessional1Service.js';
-import { assignCourseColors } from './utils/courseColors.js';
+import {
+  getSessional1Url,
+  fetchSessional1,
+  getSessional1Schedule,
+  groupSessional1ByDay,
+  formatSessional1TimeRange,
+  formatSessional1Date,
+} from './services/sessional1Service.js';
+import { assignCourseColors, withAlpha } from './utils/courseColors.js';
 import {
   DAY_ORDER,
   getClassesForRollNo,
@@ -1194,6 +1201,20 @@ function App() {
     return getSessional1Schedule(sessional1Entries, selectedClasses);
   }, [sessional1Entries, selectedClasses]);
 
+  // Grouped by exam day for the redesigned card layout (2026-09-18, on
+  // request: "polish the exam timetable and make it visually beautifull
+  // and easy to understand") — a flat table read poorly for "what do I
+  // have coming up," grouping by day (with real "Today"/"Tomorrow" cues,
+  // same self-updating-off-the-`now`-ticker pattern as the rest of this
+  // feature) makes that immediately scannable instead. `now` is UTC epoch
+  // ms; +5h gets Asia/Karachi's own calendar date (fixed offset, no DST —
+  // same fact notifyLogic.js already relies on) so "Today" is correct
+  // regardless of the viewer's own device timezone.
+  const sessional1Groups = useMemo(() => {
+    const todayISO = new Date(now + 5 * 3600 * 1000).toISOString().slice(0, 10);
+    return groupSessional1ByDay(sessional1Matches, todayISO);
+  }, [sessional1Matches, now]);
+
   // Own dedicated html2canvas capture (separate ref/target from the main
   // weekly-grid export above) — the modal's content is portaled to
   // `document.body` via `Modal`, so it needs its own ref rather than
@@ -1656,7 +1677,14 @@ function App() {
                   {sessional1Status === 'ready' && (
                     <>
                       <div ref={sessional1CaptureRef} className="sessional1-capture">
-                        <h4 className="sessional1-capture-title">Sessional-1 Seatings</h4>
+                        <div className="sessional1-capture-head">
+                          <h4 className="sessional1-capture-title">Sessional-1 Seatings</h4>
+                          {sessional1Matches.length > 0 && (
+                            <span className="sessional1-capture-count">
+                              {sessional1Matches.length} exam{sessional1Matches.length === 1 ? '' : 's'}
+                            </span>
+                          )}
+                        </div>
                         {sessional1Matches.length === 0 ? (
                           <p className="sessional1-status">
                             {selectedClasses.length === 0
@@ -1664,35 +1692,40 @@ function App() {
                               : 'None of your selected courses have a Sessional-1 exam on record.'}
                           </p>
                         ) : (
-                          <table className="sessional1-table">
-                            <thead>
-                              <tr>
-                                <th aria-hidden="true"></th>
-                                <th>Course</th>
-                                <th>Section</th>
-                                <th>Day &amp; Date</th>
-                                <th>Time</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {sessional1Matches.map((m) => (
-                                <tr key={m.classKey}>
-                                  <td>
-                                    <span
-                                      className="sessional1-color-dot"
-                                      style={{ backgroundColor: courseColors[m.course] || '#64748b' }}
-                                    />
-                                  </td>
-                                  <td>{m.course}</td>
-                                  <td>{m.section}</td>
-                                  <td>
-                                    {m.entry.day}, {m.entry.date}
-                                  </td>
-                                  <td>{m.entry.time}</td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
+                          sessional1Groups.map((group) => (
+                            <div key={group.date} className="sessional1-day-group">
+                              <div className="sessional1-day-header">
+                                <span className="sessional1-day-title">
+                                  {group.day} &middot; {formatSessional1Date(group.date)}
+                                </span>
+                                {(group.isToday || group.isTomorrow) && (
+                                  <span
+                                    className={`sessional1-day-pill${group.isToday ? ' is-today' : ''}`}
+                                  >
+                                    {group.isToday ? 'Today' : 'Tomorrow'}
+                                  </span>
+                                )}
+                              </div>
+                              {group.items.map((m) => {
+                                const color = courseColors[m.course] || '#64748b';
+                                return (
+                                  <div
+                                    key={m.classKey}
+                                    className="sessional1-card"
+                                    style={{ borderLeftColor: color, background: withAlpha(color, 0.06) }}
+                                  >
+                                    <div className="sessional1-card-info">
+                                      <span className="sessional1-card-course">{m.course}</span>
+                                      <span className="sessional1-card-section">Section {m.section}</span>
+                                    </div>
+                                    <span className="sessional1-card-time" style={{ color, borderColor: withAlpha(color, 0.35) }}>
+                                      {formatSessional1TimeRange(m.entry.time)}
+                                    </span>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          ))
                         )}
                       </div>
                       <button
