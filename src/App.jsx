@@ -11,11 +11,11 @@ import {
   groupSessional1ByDay,
   formatSessional1TimeRange,
   formatSessional1Date,
+  abbreviateSessional1Course,
 } from './services/sessional1Service.js';
 import { assignCourseColors, withAlpha } from './utils/courseColors.js';
 import {
   DAY_ORDER,
-  abbreviateCourse,
   getClassesForRollNo,
   getClassesForSection,
   getOccupiedSlots,
@@ -1742,7 +1742,7 @@ function App() {
                                     >
                                       <div className="sessional1-card-info">
                                         <span className="sessional1-card-course">
-                                          {abbreviateCourse(m.course)} ({m.section})
+                                          {abbreviateSessional1Course(m.course)} ({m.section})
                                         </span>
                                         {m.entry.room && (
                                           <span className="sessional1-card-seat">

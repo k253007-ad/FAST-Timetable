@@ -25,6 +25,8 @@
 // App.jsx — since it's a secondary, time-boxed feature that shouldn't add
 // latency to the app's normal "instant open" path.
 
+import { abbreviateCourse } from '../utils/schedule.js';
+
 // A small, dedicated `/api/data` call (rather than plumbing the URL through
 // `buildTimetableFromMeta`'s return shape) — this is a lazy, click-
 // triggered fetch, not part of the main data-load waterfall, so a second
@@ -163,7 +165,59 @@ export const formatSessional1Date = (dateStr) => {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 };
 
-const normKey = (course, section) => `${course.trim().toLowerCase()}|${section.trim().toUpperCase()}`;
+// A handful of course names abbreviate badly under the app's generic
+// `abbreviateCourse` (schedule.js) — it takes one letter per significant
+// word with no awareness of natural, human-chosen abbreviations. Confirmed
+// directly: "Understanding of Holy Quran I/Introduction to Major World
+// Religions I" (the only Holy-Quran variant that actually appears in the
+// Sessional-1 data) abbreviates to "UHQIMWR", not the "UoHQ" a student
+// would actually recognize (added 2026-09-19, on request: "the course
+// understanding of holy quran should be UoHQ ... shown in sessional
+// seatings"). Deliberately scoped to the Sessional-1 card only, not a
+// change to `abbreviateCourse` itself — that function is also used for
+// notification titles elsewhere in the app, which weren't part of this
+// request and shouldn't change as a side effect of it.
+//
+// The trailing Roman numeral is kept on purpose (on request: "also add I
+// and II etc in UoHQ") — "Understanding of Holy Quran I/Ethics I" and
+// "...II/Ethics II" are two DIFFERENT courses (different semesters), and a
+// student could plausibly have a Sessional-1 exam for either, or in a
+// later semester even both showing up historically — collapsing both to
+// a bare "UoHQ" would make them indistinguishable in the seatings list.
+const SESSIONAL1_ABBR_OVERRIDES = {
+  'understanding of holy quran i/introduction to major world religions i': 'UoHQ I',
+  'understanding of holy quran i/ethics i': 'UoHQ I',
+  'understanding of holy quran ii/ethics ii': 'UoHQ II',
+  'understanding holy quran': 'UoHQ',
+};
+
+export const abbreviateSessional1Course = (course) => {
+  const key = course.trim().toLowerCase();
+  return SESSIONAL1_ABBR_OVERRIDES[key] || abbreviateCourse(course);
+};
+
+// The Sessional-1 sheet's own `Course Name` column still carries the
+// registrar's own wording for this ONE course — different from the master
+// timetable's wording that `selectedClasses` always uses — so a plain
+// string match between the two never lines up. **Confirmed as a real,
+// user-facing bug, not just cosmetic**: a student's actual Holy Quran exam
+// was silently missing from their whole seatings list because of this
+// exact mismatch (found 2026-09-19 while adding the "UoHQ" abbreviation —
+// the course wasn't showing up in the card list AT ALL for a real roll
+// number that does have this exam, traced to this). Same alias already
+// used once before for short-code resolution (see
+// scripts/resolve_seating_codes.mjs) — applied here too, at the grouping
+// step, so matching and short-code resolution can never disagree again.
+const SESSIONAL1_NAME_ALIASES = {
+  'understanding of holy quran i/introduction to major world religions i': 'understanding of holy quran i/ethics i',
+};
+
+const canonicalCourseName = (name) => {
+  const key = name.trim().toLowerCase();
+  return SESSIONAL1_NAME_ALIASES[key] || name;
+};
+
+const normKey = (course, section) => `${canonicalCourseName(course).trim().toLowerCase()}|${section.trim().toUpperCase()}`;
 
 /**
  * Matches the student's selected "Course - Section" strings (same format
