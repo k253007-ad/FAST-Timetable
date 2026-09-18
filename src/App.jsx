@@ -15,6 +15,7 @@ import {
 import { assignCourseColors, withAlpha } from './utils/courseColors.js';
 import {
   DAY_ORDER,
+  abbreviateCourse,
   getClassesForRollNo,
   getClassesForSection,
   getOccupiedSlots,
@@ -1192,14 +1193,34 @@ function App() {
     }
   }, [sessional1Entries]);
 
+  // The viewer's own roll number, if knowable — either auto-detected from a
+  // signed-in FAST NU email, or an active "keep synced" Roll No link on the
+  // CURRENTLY ACTIVE profile (2026-09-19, on request: "remake the exam
+  // schedule so the seat and room no is mentioned"). Room/seat genuinely
+  // vary per student within the same course+section (confirmed against the
+  // real seating-plan source — see sessional1Service.js's own doc comment),
+  // so showing an exact seat is only honest when we actually know whose
+  // seat it is; deliberately does NOT fall back to Main's roll number or
+  // any other profile's — it has to be the specific roll number this
+  // exact view's `selectedClasses` belongs to, or a mismatched seat could
+  // get shown as if it were the viewer's own.
+  const sessional1KnownRollNo = useMemo(() => {
+    if (account?.user?.email) {
+      const rollNo = getRollNoFromNuEmail(account.user.email);
+      if (rollNo) return rollNo;
+    }
+    if (linkedSync?.type === 'rollno' && linkedSync.value) return linkedSync.value;
+    return null;
+  }, [account, linkedSync]);
+
   // Only classes with a real Sessional-1 match, in exam chronological order
   // — not course-name/selection order (2026-09-18, on request: "the
   // courses which data is not found should not show... make it so the
   // exam is in order not course name order, time order").
   const sessional1Matches = useMemo(() => {
     if (!sessional1Entries) return [];
-    return getSessional1Schedule(sessional1Entries, selectedClasses);
-  }, [sessional1Entries, selectedClasses]);
+    return getSessional1Schedule(sessional1Entries, selectedClasses, sessional1KnownRollNo);
+  }, [sessional1Entries, selectedClasses, sessional1KnownRollNo]);
 
   // Grouped by exam day for the redesigned card layout (2026-09-18, on
   // request: "polish the exam timetable and make it visually beautifull
@@ -1692,40 +1713,56 @@ function App() {
                               : 'None of your selected courses have a Sessional-1 exam on record.'}
                           </p>
                         ) : (
-                          sessional1Groups.map((group) => (
-                            <div key={group.date} className="sessional1-day-group">
-                              <div className="sessional1-day-header">
-                                <span className="sessional1-day-title">
-                                  {group.day} &middot; {formatSessional1Date(group.date)}
-                                </span>
-                                {(group.isToday || group.isTomorrow) && (
-                                  <span
-                                    className={`sessional1-day-pill${group.isToday ? ' is-today' : ''}`}
-                                  >
-                                    {group.isToday ? 'Today' : 'Tomorrow'}
+                          <>
+                            {!sessional1KnownRollNo && (
+                              <p className="sessional1-seat-hint">
+                                Room &amp; seat vary per student — sign in with your FAST NU email, or
+                                sync your Roll No (Roll No mode in My classes), to see your exact seat.
+                              </p>
+                            )}
+                            {sessional1Groups.map((group) => (
+                              <div key={group.date} className="sessional1-day-group">
+                                <div className="sessional1-day-header">
+                                  <span className="sessional1-day-title">
+                                    {group.day} &middot; {formatSessional1Date(group.date)}
                                   </span>
-                                )}
-                              </div>
-                              {group.items.map((m) => {
-                                const color = courseColors[m.course] || '#64748b';
-                                return (
-                                  <div
-                                    key={m.classKey}
-                                    className="sessional1-card"
-                                    style={{ borderLeftColor: color, background: withAlpha(color, 0.06) }}
-                                  >
-                                    <div className="sessional1-card-info">
-                                      <span className="sessional1-card-course">{m.course}</span>
-                                      <span className="sessional1-card-section">Section {m.section}</span>
-                                    </div>
-                                    <span className="sessional1-card-time" style={{ color, borderColor: withAlpha(color, 0.35) }}>
-                                      {formatSessional1TimeRange(m.entry.time)}
+                                  {(group.isToday || group.isTomorrow) && (
+                                    <span className={`sessional1-day-pill${group.isToday ? ' is-today' : ''}`}>
+                                      {group.isToday ? 'Today' : 'Tomorrow'}
                                     </span>
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          ))
+                                  )}
+                                </div>
+                                {group.items.map((m) => {
+                                  const color = courseColors[m.course] || '#64748b';
+                                  return (
+                                    <div
+                                      key={m.classKey}
+                                      className="sessional1-card"
+                                      style={{ borderLeftColor: color, background: withAlpha(color, 0.06) }}
+                                    >
+                                      <div className="sessional1-card-info">
+                                        <span className="sessional1-card-course">
+                                          {abbreviateCourse(m.course)} ({m.section})
+                                        </span>
+                                        {m.entry.room && (
+                                          <span className="sessional1-card-seat">
+                                            {m.entry.room}
+                                            {m.entry.seat ? ` · Seat ${m.entry.seat}` : ''}
+                                          </span>
+                                        )}
+                                      </div>
+                                      <span
+                                        className="sessional1-card-time"
+                                        style={{ color, borderColor: withAlpha(color, 0.35) }}
+                                      >
+                                        {formatSessional1TimeRange(m.entry.time)}
+                                      </span>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            ))}
+                          </>
                         )}
                       </div>
                       <button

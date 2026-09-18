@@ -4,14 +4,26 @@
 // from `/api/data` — see api/sheetConfig.js) and matches it against the
 // student's currently selected courses.
 //
+// **Reworked 2026-09-19, on request: "remake the exam schedule so the seat
+// and room no is mentioned."** The sheet is now sourced from the
+// university's own per-student seating-plan/exam-slip PDF (4,543 students,
+// 22,881 exam entries — see workspace-root CLAUDE.md's "Sessional-1
+// seatings" section for the extraction) instead of the earlier per-
+// (course,section)-only datesheet. Critically, **room/seat vary PER
+// STUDENT, not per course+section** — confirmed by scanning the whole
+// source document before building this: 445 of 545 (course,section) pairs
+// had multiple distinct room/seat values across their own students, so a
+// single "this section sits in room X" fact would often just be wrong for
+// a specific student. Day/date/time, by contrast, IS uniform within a
+// (course,section) group (confirmed the same way, 0/545 groups
+// disagreed) — only the physical seat differs.
+//
 // This is a genuinely SEPARATE data source from the weekly timetable/roll-
-// number sheets — a one-off Fall 2026 exam datesheet built by extracting
-// the university's own Sessional-1 PDF (see workspace-root CLAUDE.md for
-// the extraction process). It is NOT fetched as part of the main
-// `fetchData()` waterfall on every load — only lazily, the first time the
-// student opens the "Sessional-1 seatings" card in App.jsx — since it's a
-// secondary, time-boxed feature that shouldn't add latency to the app's
-// normal "instant open" path.
+// number sheets — a one-off Fall 2026 exam dataset. It is NOT fetched as
+// part of the main `fetchData()` waterfall on every load — only lazily,
+// the first time the student opens the "Sessional-1 seatings" card in
+// App.jsx — since it's a secondary, time-boxed feature that shouldn't add
+// latency to the app's normal "instant open" path.
 
 // A small, dedicated `/api/data` call (rather than plumbing the URL through
 // `buildTimetableFromMeta`'s return shape) — this is a lazy, click-
@@ -35,11 +47,11 @@ const parseGvizResponse = (text) => {
 };
 
 /**
- * Fetches and parses the Sessional-1 sheet into an array of records. Parses
- * by column LABEL (not fixed index) — the sheet's own header row —
- * matching this project's existing convention (see `parseRollNumbers`'
- * doc comment in timetableSource.js) so column reordering doesn't silently
- * break this.
+ * Fetches and parses the Sessional-1 sheet into a flat array of per-student
+ * exam-entry records. Parses by column LABEL (not fixed index) — the
+ * sheet's own header row — matching this project's existing convention
+ * (see `parseRollNumbers`' doc comment in timetableSource.js) so column
+ * reordering doesn't silently break this.
  */
 export const fetchSessional1 = async (url) => {
   if (!url) return [];
@@ -49,11 +61,28 @@ export const fetchSessional1 = async (url) => {
   }
   const json = parseGvizResponse(await response.text());
   const cols = json?.table?.cols || [];
-  const rows = json?.table?.rows || [];
+  let rows = json?.table?.rows || [];
   const idx = {};
   cols.forEach((c, i) => {
     if (c?.label) idx[c.label.trim()] = i;
   });
+
+  // Google's gviz endpoint doesn't always recognize row 1 as a header —
+  // whether it does depends on how the sheet's data was entered/pasted,
+  // not something this app controls. When it doesn't, `cols[].label` come
+  // back blank and the real header text ends up sitting in `rows[0]` as
+  // ordinary data instead (confirmed directly against the real uploaded
+  // sheet, 2026-09-19 — every `cols[].label` was `''`). Detect that case
+  // and fall back to reading the header from `rows[0]`'s own cell values,
+  // consuming that row so it isn't parsed as a bogus student record.
+  if (cols.length > 0 && cols.every((c) => !c?.label) && rows.length > 0) {
+    const headerCells = rows[0].c || [];
+    headerCells.forEach((cell, i) => {
+      const label = cell?.v;
+      if (label) idx[String(label).trim()] = i;
+    });
+    rows = rows.slice(1);
+  }
 
   const val = (cells, label) => {
     const i = idx[label];
@@ -65,57 +94,18 @@ export const fetchSessional1 = async (url) => {
   return rows.map((row) => {
     const cells = row.c || [];
     return {
-      campus: val(cells, 'Campus'),
+      rollNo: val(cells, 'Roll No'),
+      studentName: val(cells, 'Student Name'),
+      code: val(cells, 'Course Code'),
+      section: val(cells, 'Section'),
+      name: val(cells, 'Course Name'),
       day: val(cells, 'Day'),
       date: val(cells, 'Date'),
       time: val(cells, 'Time'),
       room: val(cells, 'Room'),
-      code: val(cells, 'Course Code'),
-      name: val(cells, 'Course Name'),
-      section: val(cells, 'Section'),
-      allSections: val(cells, 'All Sections (same exam)'),
-      studentCount: val(cells, 'Student Count'),
-      invigilators: val(cells, 'Invigilators'),
+      seat: val(cells, 'Seat') || null,
+      teacher: val(cells, 'Teacher'),
     };
-  });
-};
-
-// The Sessional-1 sheet groups sections at a broader level than the weekly
-// timetable does — e.g. one exam session covers section "BCS-1" as a
-// whole, while a selected class is the finer "BCS-1J"/"BCS-1A"/etc. (one
-// specific room-section from the weekly sheet). A selected section matches
-// a Sessional-1 row's section if it's EXACTLY that code, or if it's that
-// code plus exactly one trailing uppercase letter (the sub-section
-// suffix) — verified directly against the live master sheet before
-// building this (e.g. "BCS-1A".."BCS-1L" all trace back to "BCS-1").
-const sectionMatches = (selectedSection, sessionalSection) => {
-  if (!sessionalSection) return false;
-  const a = selectedSection.trim().toUpperCase();
-  const b = sessionalSection.trim().toUpperCase();
-  if (a === b) return true;
-  return a.startsWith(b) && /^[A-Z]$/.test(a.slice(b.length));
-};
-
-/**
- * Matches the student's selected "Course - Section" strings (same format
- * used throughout this app — see the workspace CLAUDE.md's localStorage
- * hard constraint) against the parsed Sessional-1 entries. Returns one
- * result per selected class: `{ classKey, course, section, entry }`, where
- * `entry` is null if that class has no Sessional-1 exam on record (a real,
- * expected state for e.g. a lab-only component or a course this datesheet
- * simply doesn't cover — shown as "not scheduled" rather than hidden).
- */
-export const matchSessional1 = (entries, selectedClasses) => {
-  return selectedClasses.map((classKey) => {
-    const lastSep = classKey.lastIndexOf(' - ');
-    const course = lastSep === -1 ? classKey : classKey.slice(0, lastSep);
-    const section = lastSep === -1 ? 'N/A' : classKey.slice(lastSep + 3);
-    const normCourse = course.trim().toLowerCase();
-    const entry =
-      entries.find(
-        (e) => e.name.trim().toLowerCase() === normCourse && sectionMatches(section, e.section)
-      ) || null;
-    return { classKey, course, section, entry };
   });
 };
 
@@ -173,6 +163,62 @@ export const formatSessional1Date = (dateStr) => {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 };
 
+const normKey = (course, section) => `${course.trim().toLowerCase()}|${section.trim().toUpperCase()}`;
+
+/**
+ * Matches the student's selected "Course - Section" strings (same format
+ * used throughout this app — see the workspace CLAUDE.md's localStorage
+ * hard constraint) against the parsed Sessional-1 rows, grouped by exact
+ * (course, section) — the new source uses the identical fine-grained
+ * section codes ("BCS-1A", not a broader "BCS-1") the weekly sheet already
+ * does, so no prefix/broader-section matching is needed any more (that
+ * logic existed for the OLD per-section-only datesheet, which grouped
+ * several sub-sections under one umbrella code — this dataset doesn't).
+ *
+ * `knownRollNo`, when given (the viewer's own roll number — see
+ * `getSessional1KnownRollNo` in App.jsx for where this comes from), makes
+ * the returned `entry.room`/`entry.seat` that SPECIFIC student's own exact
+ * values, since those genuinely vary within a class (confirmed above).
+ * Without it, `entry.room`/`entry.seat` are both `null` — day/date/time are
+ * still shown (uniform across the class), but showing a specific room/seat
+ * without knowing which real seat is the viewer's own would just be
+ * guessing, and a wrong seat on exam day is worse than an honest "unknown."
+ *
+ * Returns one result per selected class: `{ classKey, course, section,
+ * entry }`, where `entry` is null if that class has no Sessional-1 exam on
+ * record at all (a real, expected state — shown as "not scheduled" rather
+ * than hidden, i.e. simply omitted by `getSessional1Schedule` below).
+ */
+export const matchSessional1 = (rows, selectedClasses, knownRollNo) => {
+  const groups = new Map();
+  for (const row of rows) {
+    const key = normKey(row.name, row.section);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(row);
+  }
+
+  return selectedClasses.map((classKey) => {
+    const lastSep = classKey.lastIndexOf(' - ');
+    const course = lastSep === -1 ? classKey : classKey.slice(0, lastSep);
+    const section = lastSep === -1 ? 'N/A' : classKey.slice(lastSep + 3);
+    const group = groups.get(normKey(course, section));
+    if (!group || group.length === 0) {
+      return { classKey, course, section, entry: null };
+    }
+    const mine = knownRollNo ? group.find((r) => r.rollNo === knownRollNo) : null;
+    const rep = group[0]; // day/date/time are uniform across the group — confirmed above
+    const entry = {
+      day: rep.day,
+      date: rep.date,
+      time: rep.time,
+      room: mine ? mine.room : null,
+      seat: mine ? mine.seat : null,
+      teacher: mine ? mine.teacher : null,
+    };
+    return { classKey, course, section, entry };
+  });
+};
+
 /**
  * The actual list the UI renders (2026-09-18, on request: "the courses
  * which data is not found should not show. make it so the exam is in
@@ -181,8 +227,8 @@ export const formatSessional1Date = (dateStr) => {
  * chronologically by exam date then time, not by course name or the order
  * classes happen to be selected in.
  */
-export const getSessional1Schedule = (entries, selectedClasses) => {
-  return matchSessional1(entries, selectedClasses)
+export const getSessional1Schedule = (rows, selectedClasses, knownRollNo) => {
+  return matchSessional1(rows, selectedClasses, knownRollNo)
     .filter((m) => m.entry)
     .sort((a, b) => {
       if (a.entry.date !== b.entry.date) return a.entry.date < b.entry.date ? -1 : 1;

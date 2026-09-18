@@ -1399,6 +1399,11 @@ input.reschedule-select {
   min-width: 0;
 }
 
+/* Section now sits inside parentheses right after the course code, same
+   font as the code itself (2026-09-19, on request: "section inside the
+   brackets and same font as course name and remove the word section") —
+   `App.jsx` renders it as one plain string, "ICP (BAI-1B)", so this is the
+   only rule needed for both. */
 .sessional1-card-course {
   font-size: 13px;
   font-weight: 700;
@@ -1406,10 +1411,15 @@ input.reschedule-select {
   line-height: 1.3;
 }
 
-.sessional1-card-section {
-  font-size: 11.5px;
-  font-weight: 500;
-  color: var(--text-3);
+/* Room + Seat — deliberately the most prominent line on the card
+   (2026-09-19, on request: "make seat no and room no bigger") — this is
+   the one fact a student actually needs at a glance on exam day, bigger
+   and bolder than even the course name above it. */
+.sessional1-card-seat {
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--text);
+  letter-spacing: -0.01em;
 }
 
 .sessional1-card-time {
@@ -1425,6 +1435,23 @@ input.reschedule-select {
 
 .sessional1-print-btn {
   align-self: flex-start;
+}
+
+/* Shown only while the viewer's own roll number isn't known (2026-09-19,
+   on request: "remake the exam schedule so the seat and room no is
+   mentioned") — explains why room/seat are missing from the cards below,
+   since those genuinely vary per student and guessing one would be worse
+   than admitting it's unknown. Deliberately included in the html2canvas
+   capture (not `.no-print`) — the exported image should carry the same
+   explanation, not silently show blank room/seat with no context. */
+.sessional1-seat-hint {
+  font-size: 12px;
+  color: var(--text-2);
+  background: var(--surface-2);
+  border-radius: var(--radius-xs);
+  padding: 8px 10px;
+  margin-bottom: 12px;
+  line-height: 1.4;
 }
 
 @media (max-width: 420px) {
