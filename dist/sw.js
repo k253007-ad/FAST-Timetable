@@ -94,6 +94,9 @@ self.addEventListener('fetch', (event) => {
   // this data lives at the render layer instead — see the big comment
   // above.)
   if (url.pathname.startsWith('/api/')) return;
+  // New-deploy check (src/utils/autoUpdate.js) must always see the real
+  // server index.html, never the cached one.
+  if (url.searchParams.has('__check')) return;
 
   // Everything else same-origin GET is the app shell itself — stale-while-
   // revalidate: serve from cache immediately if present, always also
