@@ -81,12 +81,13 @@ const TimetableGrid = ({
   isDark,
   viewMode,
   selectedDay,
+  schedule,
 }) => {
   const gridRef = useRef(null);
   const dayViewRef = useRef(null);
   const { days, timeSlots, processedSchedule, sessionCount, courseCount, clashCount } = useMemo(
-    () => buildSchedule(data, selectedClasses, overrides, extraClasses, activities),
-    [data, selectedClasses, overrides, extraClasses, activities]
+    () => schedule || buildSchedule(data, selectedClasses, overrides, extraClasses, activities),
+    [schedule, data, selectedClasses, overrides, extraClasses, activities]
   );
 
   // Re-fit course labels after every render that could change them (new
@@ -207,14 +208,18 @@ const TimetableGrid = ({
       // of the normal solid left-accent — distinct at a glance from a real
       // recurring session without needing a whole second colour system.
       return {
-        backgroundColor: withAlpha(color, isDark ? 0.1 : 0.06),
+        backgroundColor: withAlpha(color, isDark ? 0.1 : 0.12),
         border: `1.5px dashed ${color}`,
         borderLeftWidth: '3px',
       };
     }
     return {
-      backgroundColor: withAlpha(color, isDark ? 0.18 : 0.11),
-      borderLeft: `3px solid ${color}`,
+      backgroundColor: withAlpha(color, isDark ? 0.18 : 0.2),
+      // Light mode needs a stronger tint plus a faint outline in the course
+      // colour, or the pastel boxes blur together on a white page.
+      ...(isDark
+        ? { borderLeft: `3px solid ${color}` }
+        : { border: `1px solid ${withAlpha(color, 0.28)}`, borderLeft: `4px solid ${color}` }),
     };
   };
 
@@ -225,7 +230,7 @@ const TimetableGrid = ({
   const activityStyle = (type) => {
     const color = getActivityColor(type);
     return {
-      backgroundColor: withAlpha(color, isDark ? 0.14 : 0.08),
+      backgroundColor: withAlpha(color, isDark ? 0.14 : 0.16),
       border: `1.5px dotted ${color}`,
       borderLeftWidth: '3px',
     };

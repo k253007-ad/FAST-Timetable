@@ -16,10 +16,11 @@ const NowNext = ({
   isMainProfile,
   onClassEnded,
   manualEndedKey,
+  schedule,
 }) => {
   const { processedSchedule } = useMemo(
-    () => buildSchedule(data, selectedClasses, overrides, extraClasses, activities),
-    [data, selectedClasses, overrides, extraClasses, activities]
+    () => schedule || buildSchedule(data, selectedClasses, overrides, extraClasses, activities),
+    [schedule, data, selectedClasses, overrides, extraClasses, activities]
   );
 
   if (!data?.timetable || selectedClasses.length === 0) return null;
@@ -132,7 +133,7 @@ const NowNext = ({
   return (
     <section className="card nownext-card no-print" aria-label="Today's class status">
       <div className="nownext-col">
-        <span className="nownext-label now">Now</span>
+        <span className={`nownext-label ${currentSession ? 'now' : 'free'}`}>{currentSession ? 'Now' : 'Free now'}</span>
         {renderNowCol()}
       </div>
       <div className="nownext-divider" />

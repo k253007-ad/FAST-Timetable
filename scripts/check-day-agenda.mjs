@@ -1,0 +1,45 @@
+import assert from 'node:assert/strict';
+import { fileURLToPath } from 'node:url';
+const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || 'playwright-core');
+const timetable = ['08:00-08:50', '10:00-10:50', '12:00-12:50'].map((Time, index) => ({ Course: `Course ${index + 1}`, Section: 'A', Instructor: 'Test Teacher', Room: 'AB1 Room 12', Day: 'Monday', Time }));
+const browser = await chromium.launch({ channel: 'msedge', headless: true });
+try {
+  const page = await browser.newPage({ viewport: { width: 390, height: 844 }, serviceWorkers: 'block' });
+  await page.clock.setFixedTime(new Date('2026-09-21T10:15:00'));
+  await page.addInitScript((timetable) => {
+    localStorage.setItem('cachedTimetableData', JSON.stringify({ data: { timetable, rollNumbers: [] }, at: Date.now() }));
+    localStorage.setItem('selectedClasses_main', JSON.stringify(timetable.map((row) => `${row.Course} - ${row.Section}`)));
+    localStorage.setItem('timetableView', 'day');
+  }, timetable);
+  await page.route('**/api/data', (route) => route.fulfill({ status: 503, contentType: 'application/json', body: '{}' }));
+  await page.route('**/api/auth-session', (route) => route.fulfill({ contentType: 'application/json', body: '{"user":null}' }));
+  await page.goto('http://127.0.0.1:5173');
+  await page.locator('.today-session.is-current').waitFor();
+  assert.equal(await page.locator('.today-session').count(), 3);
+  assert.equal(await page.locator('.today-plan input').count(), 0);
+  assert.equal(await page.locator('.day-at-glance, .agenda-break, .agenda-search-panel').count(), 0);
+  assert.equal(await page.locator('.nownext-card').count(), 0);
+  assert.equal(await page.locator('.today-status.current').innerText(), 'Now');
+  assert.equal(await page.locator('.today-status').filter({ hasText: 'Next' }).count(), 1);
+  assert.deepEqual(await page.locator('.day-tab').allTextContents(), ['M', 'T', 'W', 'Th', 'F']);
+  assert.equal(await page.locator('.tt-dayname').first().innerText(), 'Monday');
+  await page.getByRole('button', { name: 'End class', exact: true }).click();
+  assert.equal(await page.locator('.today-session.is-current').count(), 0);
+  await page.evaluate(() => { document.activeElement?.blur(); window.scrollTo(0, 0); });
+  await page.screenshot({ animations: 'disabled', path: fileURLToPath(new URL('../../../chatGPT/screenshots/today-enhanced.png', import.meta.url)), fullPage: true });
+  await page.getByRole('button', { name: 'Insights', exact: true }).click();
+  const facts = await page.locator('.insight-facts').innerText();
+  assert.match(facts, /2h 30m/);
+  assert.match(facts, /2h 20m/);
+  await page.evaluate(() => { document.activeElement?.blur(); window.scrollTo(0, 0); });
+  await page.screenshot({ animations: 'disabled', path: fileURLToPath(new URL('../../../chatGPT/screenshots/insights-enhanced.png', import.meta.url)) });
+  await page.keyboard.press('Escape');
+  await page.getByRole('tab', { name: 'Tuesday', exact: true }).click();
+  await page.getByText('No classes scheduled.', { exact: true }).waitFor();
+  await page.getByRole('button', { name: 'Edit', exact: true }).click();
+  const done = page.getByRole('button', { name: 'Done', exact: true });
+  assert.equal(await done.locator('xpath=ancestor::div[contains(@class,"timetable-actions")]').count(), 1);
+  await done.click();
+  assert.equal(await page.locator('#class-management').isVisible(), false);
+  console.log('Today checks passed: compact rows, no search/statistics/breaks, Now/Next, end class, full grid weekdays, empty day, insights, Edit/Done.');
+} finally { await browser.close(); }

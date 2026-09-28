@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import html2canvas from 'html2canvas';
+import { IconBack, IconSwitch, IconChevronDown, IconEdit, IconCheck, IconChart, IconMapPin, IconClock } from './components/Icons.jsx';
+import { DAY_LABELS } from './utils/agenda.js';
+import OtherTimetables from './components/OtherTimetables.jsx';
+import FreeRooms from './components/FreeRooms.jsx';
+import TodayView from './components/TodayView.jsx';
+import ScheduleOverview from './components/ScheduleOverview.jsx';
 import TimetableGrid from './components/TimetableGrid.jsx';
 import ClassSelector, { Modal } from './components/ClassSelector.jsx';
 import NowNext from './components/NowNext.jsx';
@@ -17,8 +22,10 @@ import {
 import { assignCourseColors, withAlpha } from './utils/courseColors.js';
 import {
   DAY_ORDER,
+  buildSchedule,
   getClassesForRollNo,
   getClassesForSection,
+  getClassesForTeacher,
   getOccupiedSlots,
   isExtraExpired,
 } from './utils/schedule.js';
@@ -123,16 +130,8 @@ const saveCachedTimetableSnapshot = (data) => {
 const isRunningStandalone = () =>
   window.matchMedia?.('(display-mode: standalone)').matches || window.navigator.standalone === true;
 
-// iOS Safari/Chrome never fire `beforeinstallprompt` and have no
-// programmatic install API at all — "Add to Home Screen" is a manual step
-// under the Share sheet. Detected by user-agent (there's no feature-test
-// for "this browser lacks an install prompt" — the card has to know to
-// show instructions instead of a button before ever finding out whether
-// `beforeinstallprompt` fires, since not-firing looks identical to
-// "hasn't fired yet").
-const isIOS = () => /iphone|ipad|ipod/i.test(window.navigator.userAgent);
 
-const PROFILE_COUNT = 5;
+const PROFILE_COUNT = 10;
 
 // Profile 1 keeps the legacy "selectedClasses" key so existing users' saved
 // selections keep landing in the right place; profiles 2-5 are additive.
@@ -186,7 +185,7 @@ const getSavedOverrides = (profile) => {
 // 1-5 plus 'main' — every profile slot's override storage, used by the
 // "master sheet actually changed" reset below (2026-09-10) so a stale
 // override can't survive under a profile that isn't currently open.
-const ALL_OVERRIDE_PROFILES = [1, 2, 3, 4, 5, 'main'];
+const ALL_OVERRIDE_PROFILES = ['main', ...Array.from({ length: PROFILE_COUNT }, (_, index) => index + 1)];
 const TIMETABLE_SIGNATURE_KEY = 'timetableSignature';
 
 // Cheap content fingerprint for "did the sheet's actual data change", not
@@ -263,7 +262,7 @@ const getSavedSync = (profile) => {
   }
 };
 
-const ALL_PROFILES = ['main', 1, 2, 3, 4, 5];
+const ALL_PROFILES = ALL_OVERRIDE_PROFILES;
 
 // Raw key literals duplicated from their owning modules on purpose (rather
 // than importing a getter/setter from each) — ClassSelector.jsx's
@@ -476,6 +475,14 @@ function App() {
   const [exporting, setExporting] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [classesOpen, setClassesOpen] = useState(() => getSavedClasses(getSavedActiveProfile()).length === 0);
+  const [insightsOpen, setInsightsOpen] = useState(false);
+  const [otherTimetablesOpen, setOtherTimetablesOpen] = useState(false);
+  const [disclaimerExpanded, setDisclaimerExpanded] = useState(true);
+  const [profileRevision, setProfileRevision] = useState(0);
+  const [profileNames, setProfileNames] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('timetableProfileNames') || '{}') || {}; } catch { return {}; }
+  });
   const [theme, setTheme] = useState(getInitialTheme);
   const [activeProfile, setActiveProfile] = useState(getSavedActiveProfile);
   const [selectedClasses, setSelectedClasses] = useState(() =>
@@ -491,7 +498,17 @@ function App() {
   // behavior; 'day' shows just one day's schedule top-to-bottom, defaulting
   // to today but browsable to any weekday via the day picker that appears
   // alongside it. Clicking "Today" always jumps back to the real today.
-  const [gridView, setGridView] = useState('week');
+  const [gridView, setGridView] = useState(() => {
+    try {
+      const saved = localStorage.getItem('timetableView');
+      if (['week', 'day', 'rooms'].includes(saved)) return saved;
+      if (saved === 'agenda') return 'day';
+    } catch { /* Storage may be unavailable. */ }
+    return window.matchMedia('(max-width: 640px)').matches ? 'day' : 'week';
+  });
+  useEffect(() => {
+    try { localStorage.setItem('timetableView', gridView); } catch { /* Optional preference. */ }
+  }, [gridView]);
   const [gridDay, setGridDay] = useState(getTodayName);
   // "Install app" card — see isRunningStandalone/isIOS above for what each
   // of these means. `installPrompt` holds the captured `beforeinstallprompt`
@@ -502,8 +519,11 @@ function App() {
   // card outright, everything else (no prompt captured yet, iOS, dismissed
   // the native prompt) keeps it showing, matching "stays until the user
   // downloads the app" — there's deliberately no manual close button.
-  const [installPrompt, setInstallPrompt] = useState(null);
-  const [showInstallCard, setShowInstallCard] = useState(() => !isRunningStandalone());
+  const [installPrompt, setInstallPrompt] = useState(() => window.__installPrompt || null);
+  const [showInstallCard, setShowInstallCard] = useState(() => {
+    if (isRunningStandalone()) return false;
+    try { return localStorage.getItem('timetableAppInstalled') !== 'true'; } catch { return true; }
+  });
   // Sessional-1 seatings (added 2026-09-18, on request: "make an option of
   // print Sessional-1 Seatings which gives timetable of selected
   // courses"). Time-boxed on purpose — the banner/button below only shows
@@ -561,18 +581,28 @@ function App() {
   // the native dialog does NOT fire this event, so the card correctly stays
   // up per "stays until the user downloads the app").
   useEffect(() => {
-    const onBeforeInstallPrompt = (e) => {
-      e.preventDefault();
-      setInstallPrompt(e);
+    const onBeforeInstallPrompt = () => {
+      if (!window.__installPrompt) return;
+      setInstallPrompt(window.__installPrompt);
+      setShowInstallCard(true);
+      try { localStorage.removeItem('timetableAppInstalled'); } catch { /* Optional persistence. */ }
     };
     const onAppInstalled = () => {
       setShowInstallCard(false);
+      try { localStorage.setItem('timetableAppInstalled', 'true'); } catch { /* Optional persistence. */ }
+      window.__installPrompt = null;
       setInstallPrompt(null);
     };
-    window.addEventListener('beforeinstallprompt', onBeforeInstallPrompt);
+    const displayMode = window.matchMedia('(display-mode: standalone)');
+    const onDisplayMode = () => { if (isRunningStandalone()) onAppInstalled(); };
+    onDisplayMode();
+    displayMode.addEventListener('change', onDisplayMode);
+    window.addEventListener('installpromptready', onBeforeInstallPrompt);
+    onBeforeInstallPrompt();
     window.addEventListener('appinstalled', onAppInstalled);
     return () => {
-      window.removeEventListener('beforeinstallprompt', onBeforeInstallPrompt);
+      displayMode.removeEventListener('change', onDisplayMode);
+      window.removeEventListener('installpromptready', onBeforeInstallPrompt);
       window.removeEventListener('appinstalled', onAppInstalled);
     };
   }, []);
@@ -731,7 +761,7 @@ function App() {
     if (serialized === lastAccountSyncRef.current) return;
     lastAccountSyncRef.current = serialized;
     pushAccountSync(payload);
-  }, [account, activeProfile, selectedClasses, overrides, extraClasses, activities, linkedSync, theme]);
+  }, [account, activeProfile, selectedClasses, overrides, extraClasses, activities, linkedSync, theme, profileRevision]);
 
   // Persist selection under the active profile's slot (legacy key + format
   // kept for profile 1, so existing users' saved selections keep working).
@@ -870,7 +900,9 @@ function App() {
     const live =
       linkedSync.type === 'rollno'
         ? getClassesForRollNo(data, linkedSync.value)
-        : getClassesForSection(data, linkedSync.value);
+        : linkedSync.type === 'teacher'
+          ? getClassesForTeacher(data, linkedSync.value)
+          : getClassesForSection(data, linkedSync.value);
     if (live === null) return;
 
     if (linkedSync.lastLive === undefined) {
@@ -902,7 +934,9 @@ function App() {
     const live =
       linkedSync.type === 'rollno'
         ? getClassesForRollNo(data, linkedSync.value)
-        : getClassesForSection(data, linkedSync.value);
+        : linkedSync.type === 'teacher'
+          ? getClassesForTeacher(data, linkedSync.value)
+          : getClassesForSection(data, linkedSync.value);
     if (live === null) return;
     setSelectedClasses(live);
     setLinkedSync({ ...linkedSync, lastLive: live });
@@ -1031,9 +1065,13 @@ function App() {
   // install itself fail).
   const handleInstallClick = useCallback(async () => {
     if (!installPrompt) return;
-    installPrompt.prompt();
-    await installPrompt.userChoice;
-    setInstallPrompt(null);
+    try {
+      await installPrompt.prompt();
+      await installPrompt.userChoice;
+    } catch {
+      // prompt rejected/unavailable — nothing else to do; no instructions by design.
+    }
+    finally { window.__installPrompt = null; setInstallPrompt(null); }
   }, [installPrompt]);
 
   // Reset every "Adjust class times" override — across ALL profiles, not
@@ -1151,6 +1189,7 @@ function App() {
           .getPropertyValue('--surface')
           .trim();
 
+        const { default: html2canvas } = await import('html2canvas');
         const canvas = await html2canvas(element, {
           scale: 2,
           backgroundColor: surface || '#ffffff',
@@ -1313,6 +1352,7 @@ function App() {
     try {
       await document.fonts?.ready;
       const surface = getComputedStyle(document.documentElement).getPropertyValue('--surface').trim();
+      const { default: html2canvas } = await import('html2canvas');
       const canvas = await html2canvas(element, { scale: 2, backgroundColor: surface || '#ffffff' });
       const stamp = new Date().toISOString().slice(0, 10);
       const link = document.createElement('a');
@@ -1370,8 +1410,19 @@ function App() {
     }
   }, []);
 
+  const overviewSchedule = useMemo(
+    () => buildSchedule(timetableData, selectedClasses, overrides, extraClasses, activities),
+    [timetableData, selectedClasses, overrides, extraClasses, activities]
+  );
+  const openSchedule = (view, day) => {
+    setGridView(view);
+    if (day) setGridDay(day);
+    document.getElementById('schedule-views')?.scrollIntoView({ block: 'start' });
+  };
+
   return (
     <div className="app">
+      <a className="skip-link" href="#main-content">Skip to timetable</a>
       <header className="app-header no-print">
         <div className="header-inner">
           <div className="brand">
@@ -1577,7 +1628,39 @@ function App() {
         </div>
       </header>
 
-      <main className="app-main">
+      <main className="app-main timetable-first" id="main-content" tabIndex={-1}>
+        <button type="button" className="schedule-warning no-print" aria-label="Schedule disclaimer" aria-expanded={disclaimerExpanded} aria-controls="schedule-warning-text" onClick={() => setDisclaimerExpanded((expanded) => !expanded)}>
+          <IconAlert size={22} />
+          <span className="warning-copy"><strong>Important: check your schedule</strong>
+            <span id="schedule-warning-text" hidden={!disclaimerExpanded}>This is an unofficial tool maintained independently by a student. Since data is updated manually, please cross-verify your schedule with official university announcements.</span>
+          </span>
+          <IconChevronDown size={18} className={disclaimerExpanded ? 'is-flipped' : undefined} />
+        </button>
+      {(showInstallCard || (authChecked && !account)) && <div className="top-actions-row no-print">
+      {showInstallCard && <aside className="persistent-install no-print" aria-label="Install the app">
+        <IconDownload size={20} />
+        <div><strong>Install FAST Timetable</strong><span>Your classes. One tap from your home screen.</span></div>
+        <button type="button" className="btn btn-primary" onClick={handleInstallClick} disabled={!installPrompt} title={installPrompt ? "Install FAST Timetable" : "Your browser hasn't offered install for this site yet"}>Install app</button>
+      </aside>}
+            {authChecked && !account && (
+              <section className="card signin-banner no-print" aria-label="Sign in with Google">
+                <IconUser size={16} className="signin-banner-icon" />
+                <span className="signin-banner-text">Sign in to sync your classes across devices</span>
+                <GoogleSignInButton onCredential={handleGoogleCredential} />
+              </section>
+            )}
+      </div>}
+
+            {authChecked && account && !isNuEmail(account.user.email) && (
+              <section
+                className="card signin-banner signin-banner-warning no-print"
+                aria-label="Signed in with a non-FAST-NU email"
+              >
+                <IconAlert size={16} className="signin-banner-icon" />
+                <span className="signin-banner-text">Login from FAST NU Email</span>
+              </section>
+            )}
+
         {status === 'loading' && (
           <div className="skeleton-page" aria-label="Loading timetable" role="status">
             <div className="card selector-card">
@@ -1687,53 +1770,116 @@ function App() {
               </div>
             )}
 
-            {/* Sign-in prompt moved here from inside the Settings menu (2026-09-15, on
-                request: "make the sign in appear at top in beginning") — the very first
-                thing on the page, above even the disclaimer, while signed out; hides
-                itself the moment `account` is set, same "stays up until done, no manual
-                dismiss" pattern as the install-app card below. Once signed in, account
-                status/sign-out stays in the Settings menu — this banner's only job is the
-                initial prompt, not ongoing account management. `authChecked` gates it so
-                it doesn't flash for the ~one network round trip the initial session check
-                takes on every load. */}
-            {authChecked && !account && (
-              <section className="card signin-banner no-print" aria-label="Sign in with Google">
-                <IconUser size={16} className="signin-banner-icon" />
-                <span className="signin-banner-text">Sign in to sync your classes across devices</span>
-                <GoogleSignInButton onCredential={handleGoogleCredential} />
-              </section>
-            )}
-
-            {/* Shown in place of the login banner once signed in with anything OTHER
-                than a FAST NU student email (2026-09-16, on request: "the ones loging
-                in from other emails should always have message at top(in place of
-                login)") — `isNuEmail`/`getRollNoFromNuEmail` (utils/nuEmail.js) parse
-                the "k<YY><NNNN>@nu.edu.pk" format FAST NU issues, which also encodes
-                the student's own roll number (see the auto-sync effect below). A real
-                FAST NU email hides this AND the login banner entirely — from then on,
-                account state lives only in the Settings menu (identity + sign out),
-                same "login goes to settings" pattern as any other signed-in account. */}
-            {authChecked && account && !isNuEmail(account.user.email) && (
-              <section
-                className="card signin-banner signin-banner-warning no-print"
-                aria-label="Signed in with a non-FAST-NU email"
-              >
-                <IconAlert size={16} className="signin-banner-icon" />
-                <span className="signin-banner-text">Login from FAST NU Email</span>
-              </section>
-            )}
-
-            {/* Moved here from ClassSelector.jsx (2026-09-14, on request: "disclamer
-                should be above download") — the install card sits between this and
-                "My classes," so the disclaimer had to move up a level to stay above it. */}
-            <div className="data-disclaimer no-print" role="note">
-              <IconAlert size={15} />
-              <span>
-                This is an unofficial tool maintained independently by a student. Since data is
-                updated manually, please cross-verify your schedule with official university
-                announcements.
-              </span>
+            <div className="timetable-heading no-print">
+              <div><div className="timetable-title-row"><h1>{activeProfile === 'main' ? 'My timetable' : profileNames[activeProfile] || 'Other timetable'}</h1><button type="button" className="timetable-switch-btn" aria-label={activeProfile === 'main' ? 'View other timetables' : 'Back to my timetable'} title={activeProfile === 'main' ? 'Other timetables' : 'Back to my timetable'} onClick={() => { if (activeProfile === 'main') setOtherTimetablesOpen(true); else { switchProfile('main'); setClassesOpen(false); } }}>{activeProfile === 'main' ? <IconSwitch /> : <IconBack />}</button></div></div>
+              <div className="timetable-actions">
+                <button type="button" className="btn btn-primary" aria-expanded={classesOpen} aria-controls="class-management" onClick={() => setClassesOpen((open) => !open)}>{classesOpen ? <IconCheck size={16} /> : <IconEdit size={16} />}{classesOpen ? 'Done' : 'Edit'}</button>
+              </div>
             </div>
+            <div className="selection-summary no-print" aria-label="Current class selection">
+              {linkedSync ? <span className="selection-sync">Synced · {linkedSync.type === 'rollno' ? 'Roll No' : linkedSync.type === 'teacher' ? 'Teacher' : 'Section'} <strong>{linkedSync.value}</strong></span> : <span>Selected courses <strong>{selectedClasses.length}</strong></span>}
+              <button type="button" className="insights-trigger" onClick={() => setInsightsOpen(true)} title="Weekly summary and statistics"><IconChart size={17} /> Insights</button>
+              {!linkedSync && selectedClasses.length > 0 && <span className="selection-course-names">{selectedClasses.join(' · ')}</span>}
+            </div>
+            <div id="class-management" hidden={!classesOpen}>
+            <ClassSelector
+              data={timetableData}
+              allClasses={allClasses}
+              selectedClasses={selectedClasses}
+              setSelectedClasses={setSelectedClasses}
+              overrides={overrides}
+              setOverrides={setOverrides}
+              extraClasses={extraClasses}
+              setExtraClasses={setExtraClasses}
+              activities={activities}
+              setActivities={setActivities}
+              courseColors={courseColors}
+              linkedSync={linkedSync}
+              setLinkedSync={setLinkedSync}
+              onResync={handleResync}
+            />
+            </div>
+
+            {gridView === 'week' && <NowNext
+              schedule={overviewSchedule}
+              data={timetableData}
+              selectedClasses={selectedClasses}
+              overrides={overrides}
+              extraClasses={extraClasses}
+              activities={activities}
+              isMainProfile={activeProfile === 'main'}
+              onClassEnded={notif.markCurrentEnded}
+              manualEndedKey={notif.manualEndedKey}
+            />}
+
+            <section id="schedule-views" className="card view-toggle-card no-print" aria-label="Schedule view">
+              <div className="view-toggle" role="group" aria-label="View layout">
+                
+                <button
+                  type="button"
+                  className={`view-tab${gridView === 'day' ? ' is-active' : ''}`}
+                  aria-pressed={gridView === 'day'}
+                  onClick={() => {
+                    setGridView('day');
+                    setGridDay(getTodayName());
+                  }}
+                >
+                  <IconClock size={16} /> Today
+                </button>
+                <button
+                  type="button"
+                  className={`view-tab${gridView === 'week' ? ' is-active' : ''}`}
+                  aria-pressed={gridView === 'week'}
+                  onClick={() => setGridView('week')}
+                >
+                  <IconCalendar size={16} /> Full Week
+                </button>
+                <button type="button" className={`view-tab${gridView === 'rooms' ? ' is-active' : ''}`} aria-pressed={gridView === 'rooms'} onClick={() => setGridView('rooms')}><IconMapPin size={16} /> Free Rooms</button>
+              </div>
+
+              {gridView === 'day' && (
+                <div className="day-picker" role="tablist" aria-label="Choose a day">
+                  {DAY_ORDER.map((d) => (
+                    <button
+                      key={d}
+                      type="button"
+                      role="tab"
+                      aria-selected={gridDay === d}
+                      aria-label={d}
+                      title={d}
+                      className={`day-tab day-tab-rich${gridDay === d ? ' is-active' : ''}${d === getTodayName() ? ' is-today' : ''}`}
+                      onClick={() => setGridDay(d)}
+                    >
+                      <span className="day-tab-name">{d.slice(0, 3)}</span>
+                      <span className="day-tab-count">{(() => { const n = (overviewSchedule.processedSchedule[d] || []).filter((c) => !c.isEmpty).length; return n ? `${n} class${n === 1 ? '' : 'es'}` : 'Free'; })()}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </section>
+
+            {gridView === 'rooms' && <FreeRooms data={timetableData} now={now} />}
+            {gridView === 'day' && <TodayView schedule={overviewSchedule} data={timetableData} day={gridDay} courseColors={courseColors} now={now} onClassEnded={activeProfile === 'main' ? notif.markCurrentEnded : undefined} manualEndedKey={activeProfile === 'main' ? notif.manualEndedKey : null} />}
+
+            <div ref={captureRef} data-capture className={`capture-area${gridView !== 'week' ? ' agenda-grid-capture' : ''}`}>
+              <TimetableGrid
+                schedule={overviewSchedule}
+                data={timetableData}
+                selectedClasses={selectedClasses}
+                overrides={overrides}
+                extraClasses={extraClasses}
+                activities={activities}
+                courseColors={courseColors}
+                isDark={theme === 'dark'}
+                viewMode="week"
+                selectedDay={gridDay}
+              />
+            </div>
+            {insightsOpen && <Modal title="Your week · insights" onClose={() => setInsightsOpen(false)}>
+              <div className="insight-context"><span>{activeProfile === 'main' ? 'My timetable' : profileNames[activeProfile] || 'Other timetable'}</span><span>{lastUpdated ? `Data updated ${timeAgo(lastUpdated, now)}` : 'Waiting for timetable data'}</span></div>
+              <ScheduleOverview schedule={overviewSchedule} onOpenDay={(day) => { setInsightsOpen(false); openSchedule('day', day); }} onOpenAgenda={() => { setInsightsOpen(false); openSchedule('week'); }} />
+              <p className="insights-note">Scheduled time counts overlapping classes once. Breaks count only time between sessions. These statistics describe the timetable currently selected.</p>
+            </Modal>}
 
             {/* Sessional-1 seatings (added 2026-09-18, on request: "make an option of
                 print Sessional-1 Seatings which gives timetable of selected courses" —
@@ -1884,117 +2030,41 @@ function App() {
               </Modal>
             )}
 
-            {showInstallCard && (
-              <section className="card install-card no-print" aria-label="Install the app">
-                <IconDownload size={16} className="install-card-icon" />
-                {isIOS() ? (
-                  <span className="install-card-text">
-                    Tap Share, then <strong>Add to Home Screen</strong>
-                  </span>
-                ) : (
-                  <>
-                    <span className="install-card-text">Install for quick access</span>
-                    <button
-                      type="button"
-                      className="btn btn-primary install-card-btn"
-                      onClick={handleInstallClick}
-                      disabled={!installPrompt}
-                      title={!installPrompt ? 'Not available in this browser session yet' : undefined}
-                    >
-                      Install
-                    </button>
-                  </>
-                )}
-              </section>
-            )}
 
-            <ClassSelector
-              data={timetableData}
-              allClasses={allClasses}
-              selectedClasses={selectedClasses}
-              setSelectedClasses={setSelectedClasses}
-              overrides={overrides}
-              setOverrides={setOverrides}
-              extraClasses={extraClasses}
-              setExtraClasses={setExtraClasses}
-              activities={activities}
-              setActivities={setActivities}
-              courseColors={courseColors}
-              activeProfile={activeProfile}
-              profileCount={PROFILE_COUNT}
-              onSwitchProfile={switchProfile}
-              linkedSync={linkedSync}
-              setLinkedSync={setLinkedSync}
-              onResync={handleResync}
-            />
 
-            <NowNext
-              data={timetableData}
-              selectedClasses={selectedClasses}
-              overrides={overrides}
-              extraClasses={extraClasses}
-              activities={activities}
-              isMainProfile={activeProfile === 'main'}
-              onClassEnded={notif.markCurrentEnded}
-              manualEndedKey={notif.manualEndedKey}
-            />
 
-            <section className="card view-toggle-card no-print">
-              <div className="view-toggle">
-                <button
-                  type="button"
-                  className={`view-tab${gridView === 'day' ? ' is-active' : ''}`}
-                  onClick={() => {
-                    setGridView('day');
-                    setGridDay(getTodayName());
-                  }}
-                >
-                  Today
-                </button>
-                <button
-                  type="button"
-                  className={`view-tab${gridView === 'week' ? ' is-active' : ''}`}
-                  onClick={() => setGridView('week')}
-                >
-                  Full Week
-                </button>
-              </div>
 
-              {gridView === 'day' && (
-                <div className="day-picker" role="tablist" aria-label="Choose a day">
-                  {DAY_ORDER.map((d) => (
-                    <button
-                      key={d}
-                      type="button"
-                      role="tab"
-                      aria-selected={gridDay === d}
-                      className={`day-tab${gridDay === d ? ' is-active' : ''}`}
-                      onClick={() => setGridDay(d)}
-                    >
-                      {d}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </section>
-
-            <div ref={captureRef} data-capture className="capture-area">
-              <TimetableGrid
-                data={timetableData}
-                selectedClasses={selectedClasses}
-                overrides={overrides}
-                extraClasses={extraClasses}
-                activities={activities}
-                courseColors={courseColors}
-                isDark={theme === 'dark'}
-                viewMode={gridView}
-                selectedDay={gridDay}
-              />
-            </div>
           </>
         )}
       </main>
 
+      {otherTimetablesOpen && <OtherTimetables
+        profiles={Array.from({ length: PROFILE_COUNT }, (_, index) => ({ id: index + 1, name: profileNames[index + 1] || '', classes: activeProfile === index + 1 ? selectedClasses : getSavedClasses(index + 1) }))}
+        onClose={() => setOtherTimetablesOpen(false)}
+        onView={(profile) => { switchProfile(profile); setClassesOpen(false); setOtherTimetablesOpen(false); }}
+        onDelete={(profile) => {
+          if (!Number.isInteger(profile) || profile < 1 || profile > PROFILE_COUNT) return;
+          if (profile === activeProfile) { switchProfile('main'); setClassesOpen(false); }
+          const names = { ...profileNames };
+          delete names[profile];
+          setProfileNames(names);
+          try {
+            [getProfileStorageKey, getOverrideStorageKey, getExtraStorageKey, getActivityStorageKey, getSyncStorageKey].forEach((getKey) => localStorage.removeItem(getKey(profile)));
+            localStorage.setItem('timetableProfileNames', JSON.stringify(names));
+          } catch { /* Storage unavailable. */ }
+          setProfileRevision((revision) => revision + 1);
+        }}
+        onSave={(draft) => {
+          const names = { ...profileNames, [draft.id]: draft.name.trim() };
+          setProfileNames(names);
+          try { localStorage.setItem('timetableProfileNames', JSON.stringify(names)); } catch { /* Names still work for this session. */ }
+          if (draft.isNew) {
+            switchProfile(draft.id);
+            setClassesOpen(true);
+            setOtherTimetablesOpen(false);
+          }
+        }}
+      />}
       <footer className="app-footer no-print">
         <span>An unofficial tool, built by Adnan 25K-3007 for FAST NUCES students.</span>
         <span>

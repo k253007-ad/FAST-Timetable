@@ -1,0 +1,183 @@
+/* Professional polish layer (2026-09-28): quieter notices so the timetable
+   leads the page. Loaded last; plain hex/rgba only (html2canvas export). */
+
+/* Verification notice: calm amber info strip instead of a red alarm box. */
+.schedule-warning {
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border: 1px solid rgba(217, 119, 6, 0.28);
+  border-left: 3px solid #d97706;
+  border-radius: 10px;
+  background: rgba(245, 158, 11, 0.07);
+  color: var(--text);
+}
+.schedule-warning > svg:first-child { color: #d97706; width: 18px; height: 18px; margin-top: 0; }
+.schedule-warning > svg:last-child { color: var(--text-3); }
+.schedule-warning strong { display: inline; font-size: 13px; font-weight: 650; margin: 0; }
+.warning-copy > span { margin-top: 3px; color: var(--text-2); line-height: 1.55; }
+:root[data-theme='dark'] .schedule-warning { border-color: rgba(251, 191, 36, 0.25); border-left-color: #f59e0b; background: rgba(245, 158, 11, 0.08); }
+:root[data-theme='dark'] .schedule-warning > svg:first-child { color: #fbbf24; }
+
+/* Install prompt + sign-in: one row on desktop, stacked on phones. */
+.top-actions-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 12px; }
+.top-actions-row > * { margin: 0; min-width: 0; }
+.persistent-install {
+  padding: 8px 10px 8px 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: none;
+}
+.persistent-install > svg { color: var(--accent-ink); width: 18px; height: 18px; }
+.persistent-install > div { gap: 1px; }
+.persistent-install strong { font-size: 13px; font-weight: 650; }
+.persistent-install span { color: var(--text-2); font-size: 12px; }
+.persistent-install .btn { min-height: 36px; padding: 0 14px; background: var(--accent); color: #ffffff; border: 1px solid var(--accent); font-weight: 650; }
+.persistent-install .btn:hover:not(:disabled) { background: var(--accent-hover); }
+@media (max-width: 720px), (pointer: coarse) {
+  .top-actions-row { grid-template-columns: 1fr; gap: 10px; }
+  .persistent-install { padding: 10px 12px; border-top: 1px solid var(--border); box-shadow: none; background: var(--surface); color: var(--text); }
+  .persistent-install > svg { color: var(--accent-ink); width: 20px; height: 20px; }
+  .persistent-install span { color: var(--text-2); }
+  .persistent-install .btn { min-height: 38px; background: var(--accent); color: #ffffff; border-color: var(--accent); }
+}
+
+/* Sign-in strip: compact, secondary. */
+.signin-banner { padding: 8px 14px; box-shadow: none; }
+.signin-banner-text { font-size: 13px; color: var(--text-2); }
+
+/* Timetable heading: a touch more presence, less vertical waste. */
+.timetable-heading { padding: 8px 0 2px; }
+.timetable-heading h1 { font-size: 30px; font-weight: 750; }
+
+/* Now/Next: neutral state when nothing is in progress. */
+.nownext-label.free { background: var(--surface-3); color: var(--text-2); }
+
+/* My classes header: Resync / Clear all grouped on the right. */
+.selector-head-actions { display: inline-flex; align-items: center; gap: 18px; margin-left: auto; }
+
+/* Weekly grid: crisper, more document-like. */
+.grid-card, .timetable-card { box-shadow: var(--shadow-sm); }
+.class-box { border-radius: 8px; }
+
+/* Heading block: pull the sync summary up under the title. */
+.selection-summary { margin-top: -6px; }
+
+/* Now/Next as a slim status strip rather than a tall card. */
+.timetable-first .nownext-card { padding: 10px 16px; gap: 16px; align-items: center; }
+.timetable-first .nownext-card .nownext-col { gap: 4px; }
+.timetable-first .nownext-countdown { font-size: 20px; line-height: 1.2; }
+.timetable-first .nownext-course { font-size: 14px; }
+
+/* ---------- Light theme refinement ---------- */
+:root[data-theme='light'] {
+  --bg: #f3f5f9;
+  --surface-2: #f8f9fc;
+  --surface-3: #eef1f6;
+  --border: #e3e7ee;
+  --border-strong: #cfd6e1;
+  --text: #0f172a;
+  --text-2: #4b5567;
+  --text-3: #8591a3;
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.04), 0 1px 1px rgba(15, 23, 42, 0.03);
+  --shadow-md: 0 1px 2px rgba(15, 23, 42, 0.05), 0 6px 16px -6px rgba(15, 23, 42, 0.08);
+}
+:root[data-theme='light'] body {
+  background: #f3f5f9;
+  background-image: radial-gradient(1200px 380px at 50% -140px, rgba(79, 70, 229, 0.07), rgba(79, 70, 229, 0));
+  background-repeat: no-repeat;
+}
+:root[data-theme='light'] .app-header { background: rgba(255, 255, 255, 0.92); border-bottom-color: #e6e9f0; box-shadow: 0 1px 0 rgba(15, 23, 42, 0.02); }
+:root[data-theme='light'] .card:not(.view-toggle-card) { border-color: #e3e7ee; box-shadow: var(--shadow-sm); }
+:root[data-theme='light'] .timetable-heading h1 { color: #0b1220; }
+:root[data-theme='light'] .selection-summary .selection-sync { color: #047857; }
+:root[data-theme='light'] .timetable-first .nownext-card { background: #ffffff; border-color: #e3e7ee; box-shadow: var(--shadow-sm); }
+:root[data-theme='light'] .timetable-first .view-toggle { box-shadow: var(--shadow-sm); }
+:root[data-theme='light'] .signin-banner { background: #ffffff; }
+:root[data-theme='light'] .grid-card { border-color: #dfe4ec; box-shadow: var(--shadow-md); }
+:root[data-theme='light'] .tt-head { background: #f7f8fb; }
+:root[data-theme='light'] .tt-slot-num { color: #8591a3; }
+:root[data-theme='light'] .tt-slot-time { color: #1e293b; }
+:root[data-theme='light'] .tt-daycell { background: #fbfcfe; }
+:root[data-theme='light'] .tt-dayname { color: #0f172a; font-weight: 650; }
+:root[data-theme='light'] .class-box { box-shadow: 0 1px 1px rgba(15, 23, 42, 0.04); }
+:root[data-theme='light'] .class-course { color: #0f172a; }
+
+/* Free rooms view */
+.free-rooms { padding: 18px 20px; display: grid; gap: 14px; }
+.free-rooms-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.free-rooms-head h2 { margin: 0; font-size: 18px; }
+.free-rooms-head p { margin: 3px 0 0; font-size: 13px; color: var(--text-2); }
+.free-rooms-toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-2); cursor: pointer; white-space: nowrap; }
+.free-rooms-toggle input { accent-color: var(--accent); width: 16px; height: 16px; }
+.free-rooms-controls { display: grid; gap: 10px; }
+.free-rooms-slots { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 2px; }
+.free-slot { display: grid; gap: 1px; flex-shrink: 0; min-width: 72px; padding: 7px 10px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); color: var(--text); font: inherit; font-size: 13px; font-weight: 650; cursor: pointer; text-align: center; }
+.free-slot span { font-size: 10px; font-weight: 600; color: var(--text-3); text-transform: uppercase; letter-spacing: .04em; }
+.free-slot:hover { border-color: var(--accent); }
+.free-slot.is-active { background: var(--accent); border-color: var(--accent); color: #ffffff; }
+.free-slot.is-active span { color: rgba(255, 255, 255, 0.8); }
+.free-rooms-group h3 { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; font-size: 13px; color: var(--text-2); text-transform: uppercase; letter-spacing: .04em; }
+.free-rooms-group h3 span { padding: 1px 7px; border-radius: 999px; background: var(--surface-3); font-size: 11px; }
+.free-rooms-group ul { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; }
+.free-rooms-group li { display: flex; align-items: center; gap: 6px; padding: 8px 10px; border: 1px solid rgba(22, 163, 74, 0.28); border-radius: 9px; background: var(--success-soft); color: var(--text); font-size: 13px; font-weight: 600; }
+.free-rooms-group li svg { color: var(--success-ink); flex-shrink: 0; }
+.free-rooms-group li.is-lab { border-color: rgba(79, 70, 229, 0.28); background: var(--accent-soft); }
+.free-rooms-group li.is-lab svg { color: var(--accent-ink); }
+.free-rooms-empty, .free-rooms-note { margin: 0; font-size: 12px; color: var(--text-2); }
+
+/* Today — calendar-style day view (TodayView 2nd rework) */
+.tv2 { padding: 18px 20px; display: grid; gap: 14px; }
+.tv2-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.tv2-head h2 { margin: 0; font-size: 22px; }
+.tv2-head span { font-size: 13px; color: var(--text-2); }
+.tv2-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.tv2-card { display: grid; align-content: start; gap: 3px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-2); min-width: 0; }
+.tv2-card.is-live { background: var(--success-soft); border-color: rgba(22, 163, 74, 0.35); }
+.tv2-card-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--text-3); }
+.tv2-card.is-live .tv2-card-label { color: var(--success-ink); }
+.tv2-card strong { font-size: 15px; line-height: 1.3; overflow-wrap: anywhere; }
+.tv2-card-meta { font-size: 12px; color: var(--text-2); }
+.tv2-warn { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 600; color: var(--danger-ink); }
+.tv2-progress { height: 5px; margin-top: 5px; border-radius: 999px; background: rgba(22, 163, 74, 0.15); overflow: hidden; }
+.tv2-progress span { display: block; height: 100%; background: var(--success); border-radius: inherit; }
+.tv2-end { justify-self: start; font-size: 12px; margin-top: -4px; }
+.tv2-timeline { position: relative; margin-top: 4px; }
+.tv2-hour { position: absolute; left: 0; right: 0; height: 0; border-top: 1px solid var(--border); }
+.tv2-hour span { position: absolute; top: -8px; left: 0; width: 44px; padding-right: 6px; text-align: right; font-size: 11px; color: var(--text-3); background: var(--surface); }
+.tv2-gap { position: absolute; left: 56px; right: 0; display: flex; flex-wrap: wrap; align-content: center; justify-content: center; gap: 4px 12px; font-size: 11px; color: var(--text-2); border-radius: 8px; background: repeating-linear-gradient(135deg, rgba(100, 116, 139, 0.05) 0 6px, rgba(100, 116, 139, 0) 6px 12px); overflow: hidden; }
+.tv2-gap span { display: inline-flex; align-items: center; gap: 4px; }
+.tv2-block { position: absolute; z-index: 1; left: 56px; right: 0; display: flex; gap: 6px; padding: 2px 0; }
+.tv2-block.is-past { opacity: .5; }
+.tv2-event { flex: 1; min-width: 0; display: grid; align-content: start; gap: 3px; padding: 6px 10px; border-left: 4px solid; border-radius: 8px; overflow: hidden; }
+.tv2-block.is-now .tv2-event { box-shadow: 0 0 0 2px var(--success); }
+.tv2-block.is-clash .tv2-event { box-shadow: 0 0 0 1px var(--danger); }
+.tv2-event-top { display: flex; justify-content: space-between; gap: 8px; }
+.tv2-event-top strong { font-size: 13px; line-height: 1.3; overflow-wrap: anywhere; color: var(--text); }
+.tv2-event-time { flex-shrink: 0; font-size: 11px; color: var(--text-2); }
+.tv2-event-meta { display: flex; flex-wrap: wrap; gap: 2px 12px; font-size: 11px; color: var(--text-2); }
+.tv2-event-meta > span { display: inline-flex; align-items: center; gap: 3px; }
+.tv2-event-meta b { color: var(--text); }
+.tv2-tag { padding: 0 6px; border-radius: 5px; background: var(--accent-soft); color: var(--accent-ink); font-weight: 600; }
+.tv2-now { position: absolute; left: 50px; right: 0; height: 0; border-top: 2px solid #ef4444; z-index: 2; pointer-events: none; }
+.tv2-now::before { content: ''; position: absolute; left: -5px; top: -6px; width: 10px; height: 10px; border-radius: 50%; background: #ef4444; }
+.tv2-now span { position: absolute; left: -46px; top: -9px; padding: 1px 6px; border-radius: 5px; background: #ef4444; color: #ffffff; font-size: 10px; font-weight: 700; }
+@media (max-width: 640px) {
+  .tv2 { padding: 14px; }
+}
+
+/* Today day picker: "Mon · 5 classes" instead of single letters */
+.day-tab.day-tab-rich { display: grid; gap: 1px; justify-items: center; padding: 6px 12px; min-width: 64px; line-height: 1.2; position: relative; }
+.day-tab-rich .day-tab-name { font-size: 13px; font-weight: 700; }
+.day-tab-rich .day-tab-count { font-size: 10px; font-weight: 500; opacity: .75; }
+.day-tab-rich.is-today::after { content: ''; position: absolute; top: 5px; right: 6px; width: 6px; height: 6px; border-radius: 50%; background: var(--success); }
+
+/* Today: highlight Now / Next blocks — soft, same tokens as the rest of the app */
+.tv2-block.is-now, .tv2-block.is-next { z-index: 3; }
+.tv2-block.is-now .tv2-event { box-shadow: 0 0 0 1.5px var(--success); }
+.tv2-block.is-next .tv2-event { box-shadow: 0 0 0 1.5px var(--accent); }
+.tv2-flag { display: inline-block; margin-right: 6px; padding: 1px 6px; border-radius: 5px; font-size: 10px; font-weight: 700; vertical-align: 1px; }
+.tv2-flag.now { background: var(--success-soft); color: var(--success-ink); }
+.tv2-flag.next { background: var(--accent-soft); color: var(--accent-ink); }

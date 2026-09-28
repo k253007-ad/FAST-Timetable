@@ -692,9 +692,6 @@ const ClassSelector = ({
   activities,
   setActivities,
   courseColors,
-  activeProfile,
-  profileCount,
-  onSwitchProfile,
   linkedSync,
   setLinkedSync,
   onResync,
@@ -708,7 +705,6 @@ const ClassSelector = ({
   // persisting indefinitely — see `handleSyncSelect`/`switchMode`.
   const [noDataMessage, setNoDataMessage] = useState('');
   const [open, setOpen] = useState(false);
-  const [minimized, setMinimized] = useState(false);
   const [showChips, setShowChips] = useState(false);
   // "Search courses" popup (2026-09-10, on request: "remove the search
   // course from the options and make it popup, which can be accessed from
@@ -1086,25 +1082,6 @@ const ClassSelector = ({
     });
   }, [groups, groupQuery]);
 
-  const isGroupSelected = (classes) => classes.length > 0 && classes.every((c) => selectedClasses.includes(c));
-
-  // Same stable-callback approach as handleToggleClass above: the checkbox's
-  // own `value` (the group name) is looked up in `groups` inside the handler,
-  // so GroupOptionRow's memo can skip re-rendering unaffected rows.
-  const handleToggleGroup = useCallback(
-    (e) => {
-      const group = groups.find((g) => g.name === e.target.value);
-      if (!group) return;
-      const { classes } = group;
-      setSelectedClasses((prev) => {
-        const allSelected = classes.every((c) => prev.includes(c));
-        if (allSelected) return prev.filter((c) => !classes.includes(c));
-        return [...new Set([...prev, ...classes])];
-      });
-    },
-    [groups, setSelectedClasses]
-  );
-
   // Picking a row in Roll No/Section mode sets it as the profile's synced
   // source — App.jsx's effect then replaces the whole selection with that
   // group's live classes (see the "Keep synced" doc comment above). `mode`
@@ -1143,11 +1120,6 @@ const ClassSelector = ({
     setOpen(false);
   };
 
-  const toggleMinimized = () => {
-    setOpen(false);
-    setMinimized((v) => !v);
-  };
-
   // "Add courses" (2026-09-10, on request: a button in "Selected courses"
   // that "goes to search courses popup") — opens the "Search courses"
   // modal (`showCourseSearch`; Course is no longer a mode tab at all as of
@@ -1182,7 +1154,6 @@ const ClassSelector = ({
   // "main" is a fixed extra slot before the numbered ones — it's the user's
   // own timetable, and the one class notifications are computed from
   // regardless of which slot is open here (see App.jsx / useClassNotifications).
-  const profileIds = ['main', ...Array.from({ length: profileCount }, (_, i) => i + 1)];
 
   const groupUnitLabel =
     mode === 'rollno' ? 'roll numbers' : mode === 'section' ? 'sections' : 'instructors';
@@ -1205,16 +1176,18 @@ const ClassSelector = ({
         {selectedClasses.length > 0 && (
           <span className="count-pill">{selectedClasses.length} selected</span>
         )}
-        {linkedSync && (
-          <button type="button" className="link-button" onClick={() => setConfirmAction('resync')}>
-            Resync
-          </button>
-        )}
-        {selectedClasses.length > 0 && (
-          <button type="button" className="link-button" onClick={() => setConfirmAction('clear')}>
-            Clear all
-          </button>
-        )}
+        <span className="selector-head-actions">
+          {linkedSync && (
+            <button type="button" className="link-button" onClick={() => setConfirmAction('resync')}>
+              Resync
+            </button>
+          )}
+          {selectedClasses.length > 0 && (
+            <button type="button" className="link-button" onClick={() => setConfirmAction('clear')}>
+              Clear all
+            </button>
+          )}
+        </span>
       </div>
       {confirmAction && (
         <Modal
@@ -1224,7 +1197,7 @@ const ClassSelector = ({
           <p>
             {confirmAction === 'clear'
               ? `This removes all ${selectedClasses.length} selected classes from this timetable.`
-              : `This resets your classes to exactly what ${linkedSync?.type === 'rollno' ? 'Roll No' : 'Section'} ${linkedSync?.value} has now. Courses you added or removed by hand will be undone.`}
+              : `This resets your classes to exactly what ${linkedSync?.type === 'rollno' ? 'Roll No' : linkedSync?.type === 'teacher' ? 'Teacher' : 'Section'} ${linkedSync?.value} has now. Courses you added or removed by hand will be undone.`}
           </p>
           <div className="confirm-actions">
             <button type="button" className="action-btn" onClick={() => setConfirmAction(null)}>
@@ -1246,35 +1219,6 @@ const ClassSelector = ({
       )}
 
       <div className="selector-toolbar">
-        <div className="toolbar-secondary">
-          <button
-            type="button"
-            className="minimize-btn"
-            onClick={toggleMinimized}
-            aria-expanded={!minimized}
-            aria-label={minimized ? 'Expand my classes' : 'Minimize my classes'}
-            title={minimized ? 'Expand' : 'Minimize'}
-          >
-            <IconChevronDown size={16} className={minimized ? undefined : 'is-flipped'} />
-          </button>
-
-          <div className="profile-tabs" role="tablist" aria-label="Timetable slot">
-            {profileIds.map((id) => (
-              <button
-                key={id}
-                type="button"
-                role="tab"
-                aria-selected={activeProfile === id}
-                className={`profile-tab${activeProfile === id ? ' is-active' : ''}${id === 'main' ? ' profile-tab-main' : ''}`}
-                onClick={() => onSwitchProfile(id)}
-                title={id === 'main' ? 'Main — your own timetable' : `Timetable ${id}`}
-              >
-                {id === 'main' ? 'Main' : id}
-              </button>
-            ))}
-          </div>
-        </div>
-
         {linkedSync ? (
           // Deliberately NOT gated by `!minimized` (2026-09-07, on request)
           // — a sync being active is important status the student should
@@ -1286,13 +1230,13 @@ const ClassSelector = ({
               className="synced-indicator-btn"
               onClick={() => setShowSyncInfo((v) => !v)}
               aria-expanded={showSyncInfo}
-              aria-label={`Synced with ${linkedSync.type === 'rollno' ? 'Roll No' : 'Section'} ${linkedSync.value} — press for info and to cancel syncing`}
+              aria-label={`Synced with ${linkedSync.type === 'rollno' ? 'Roll No' : linkedSync.type === 'teacher' ? 'Teacher' : 'Section'} ${linkedSync.value} — press for info and to cancel syncing`}
             >
-              {linkedSync.type === 'rollno' ? 'Roll No' : 'Section'} {linkedSync.value}
+              {linkedSync.type === 'rollno' ? 'Roll No' : linkedSync.type === 'teacher' ? 'Teacher' : 'Section'} {linkedSync.value}
             </button>
             {showSyncInfo && (
               <div className="info-popover" role="tooltip">
-                Your classes are replaced with {linkedSync.type === 'rollno' ? 'this roll number' : 'this section'}
+                Your classes are replaced with {linkedSync.type === 'rollno' ? 'this roll number' : linkedSync.type === 'teacher' ? 'this teacher' : 'this section'}
                 &rsquo;s current schedule automatically — the first time it&rsquo;s picked, and again every time
                 the timetable refreshes. Cancel to pick classes yourself again.
                 <button
@@ -1323,7 +1267,7 @@ const ClassSelector = ({
           </p>
         )}
 
-        {!linkedSync && !minimized && (
+        {!linkedSync && (
             <div className="mode-tabs" role="tablist" aria-label="Selection mode">
               <button
                 type="button"
@@ -1418,15 +1362,14 @@ const ClassSelector = ({
         </Modal>
       )}
 
-      {!minimized && !linkedSync && mode === 'rollno' && !hasRollData && (
+      {!linkedSync && mode === 'rollno' && !hasRollData && (
         <p className="selector-hint">
           Roll-number selection isn’t available yet — check back once this data source is
           connected.
         </p>
       )}
 
-      {!minimized &&
-        !linkedSync &&
+      {        !linkedSync &&
         (mode === 'rollno' || mode === 'teacher' || mode === 'section') &&
         (mode !== 'rollno' || hasRollData) && (
         <div className="combobox" ref={comboboxRef}>
@@ -1484,15 +1427,7 @@ const ClassSelector = ({
                   </div>
                 ) : (
                   filteredGroups.slice(0, MAX_VISIBLE_RESULTS).map((group) =>
-                    mode === 'teacher' ? (
-                      <GroupOptionRow
-                        key={group.name}
-                        name={group.name}
-                        count={group.classes.length}
-                        checked={isGroupSelected(group.classes)}
-                        onToggle={handleToggleGroup}
-                      />
-                    ) : (
+                    (
                       <SyncOptionRow
                         key={group.name}
                         name={group.name}
@@ -1514,7 +1449,7 @@ const ClassSelector = ({
           panels (2026-09-07, on request) — see Modal above. Always all 4
           buttons, disabled with a title tooltip rather than hidden when
           there's nothing to act on yet, so the row never jumps around. */}
-      {!minimized && (
+      {(
         <div className="section-btn-row">
           <button type="button" className="section-btn" onClick={() => setShowChips(true)}>
             <span>Select courses</span>

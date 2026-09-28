@@ -306,6 +306,14 @@ export const getClassesForRollNo = (data, rollNo) => {
   return [...classes];
 };
 
+export const getClassesForTeacher = (data, teacher) => {
+  if (!teacher || !data?.timetable?.length) return null;
+  const normalized = teacher.trim().toLowerCase();
+  return [...new Set(data.timetable
+    .filter((item) => (item.Instructor || '').trim().toLowerCase() === normalized)
+    .map((item) => `${item.Course} - ${item.Section}`))];
+};
+
 export const getClassesForSection = (data, section) => {
   if (!section || !data?.timetable?.length) return null;
   const normalized = section.trim().toLowerCase();
