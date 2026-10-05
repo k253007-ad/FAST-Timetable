@@ -36,6 +36,12 @@ export default async function handler(req, res) {
     return;
   }
 
-  await saveAccount(googleId, { ...account, data, updatedAt: Date.now() });
+  // Older deployed clients do not send profile names. Preserve names already
+  // saved by a newer client when one of those clients updates its classes.
+  const nextData = data && typeof data === 'object' && !('profileNames' in data) &&
+    account.data?.profileNames
+    ? { ...data, profileNames: account.data.profileNames }
+    : data;
+  await saveAccount(googleId, { ...account, data: nextData, updatedAt: Date.now() });
   res.status(200).json({ ok: true });
 }
