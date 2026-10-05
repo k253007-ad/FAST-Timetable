@@ -255,7 +255,9 @@ const TimetableGrid = ({
       );
     }
     const hasSection = classItem.Section !== 'N/A';
-    const extraSuffix = classItem.isExtra ? ' · Extra, this week only' : '';
+    const extraSuffix = classItem.isExtra
+      ? (classItem.isReserved ? ' · Extra class' : ' · Extra, this week only')
+      : '';
     return (
       <div
         key={index}

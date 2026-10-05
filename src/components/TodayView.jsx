@@ -100,7 +100,7 @@ export default function TodayView({ schedule, data, day, courseColors, now, onCl
       };
     }
     if (!cells.length) return { label: 'Now', title: 'Free day', meta: 'No classes today' };
-    if (next) return { label: 'Now', title: doneCount ? 'On a break' : 'Not started yet', meta: `Free until ${next.startLabel}` };
+    if (next) return { label: 'Now', title: `Next class in ${fmtDuration(next.startMin - minute)}`, meta: `${doneCount ? 'On a break · ' : ''}starts at ${next.startLabel}` };
     return { tone: 'done', label: 'Now', title: 'Done for today', meta: `${cells.length} of ${cells.length} finished` };
   })();
 
@@ -109,7 +109,7 @@ export default function TodayView({ schedule, data, day, courseColors, now, onCl
     if (target) {
       const it = mainItem(target);
       return {
-        label: isToday ? `Next · in ${fmtDuration(target.startMin - minute)}` : 'First class',
+        label: isToday ? 'Next' : 'First class',
         title: it.Course,
         meta: `${target.startLabel} · ${it.isActivity ? 'Activity' : cleanRoom(it.Room)}`,
       };

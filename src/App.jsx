@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { IconBack, IconSwitch, IconChevronDown, IconEdit, IconCheck, IconChart, IconMapPin, IconClock } from './components/Icons.jsx';
-import { DAY_LABELS } from './utils/agenda.js';
+import { getWeekInsights, formatDuration } from './utils/agenda.js';
 import OtherTimetables from './components/OtherTimetables.jsx';
 import FreeRooms from './components/FreeRooms.jsx';
 import TodayView from './components/TodayView.jsx';
@@ -132,6 +132,14 @@ const isRunningStandalone = () =>
 
 
 const PROFILE_COUNT = 10;
+const getSavedProfileNames = () => {
+  try {
+    const names = JSON.parse(localStorage.getItem('timetableProfileNames') || '{}');
+    return names && typeof names === 'object' && !Array.isArray(names) ? names : {};
+  } catch {
+    return {};
+  }
+};
 
 // Profile 1 keeps the legacy "selectedClasses" key so existing users' saved
 // selections keep landing in the right place; profiles 2-5 are additive.
@@ -287,7 +295,7 @@ const CALENDAR_FEED_ID_KEY = 'calendarFeedId';
 // a render or two anyway (separate persist-effects write each field), but
 // passing the live values avoids a theoretical race where a sync fires in
 // the same tick as a state change that hasn't been persisted yet.
-const buildAccountSyncPayload = (activeProfile, liveActive) => {
+const buildAccountSyncPayload = (activeProfile, liveActive, profileNames) => {
   const profiles = {};
   ALL_PROFILES.forEach((profile) => {
     if (profile === activeProfile) {
@@ -310,6 +318,7 @@ const buildAccountSyncPayload = (activeProfile, liveActive) => {
   }
   return {
     profiles,
+    profileNames,
     activeProfile,
     theme: getInitialTheme(),
     customActivityTypes,
@@ -326,6 +335,19 @@ const buildAccountSyncPayload = (activeProfile, liveActive) => {
 // profile switch/reload.
 const applyAccountData = (data, setters) => {
   if (!data || typeof data !== 'object') return;
+
+  // Older account snapshots did not include names. Keep this device's names
+  // until a new snapshot includes the field, so they can be migrated safely.
+  if (data.profileNames && typeof data.profileNames === 'object' && !Array.isArray(data.profileNames)) {
+    const names = Object.fromEntries(
+      Object.entries(data.profileNames).filter(([id, name]) =>
+        Number.isInteger(Number(id)) && Number(id) >= 1 && Number(id) <= PROFILE_COUNT &&
+        typeof name === 'string' && name.trim()
+      ).map(([id, name]) => [id, name.trim()])
+    );
+    try { localStorage.setItem('timetableProfileNames', JSON.stringify(names)); } catch { /* Storage unavailable. */ }
+    setters.setProfileNames(names);
+  }
 
   ALL_PROFILES.forEach((profile) => {
     const p = data.profiles?.[profile];
@@ -480,9 +502,7 @@ function App() {
   const [otherTimetablesOpen, setOtherTimetablesOpen] = useState(false);
   const [disclaimerExpanded, setDisclaimerExpanded] = useState(true);
   const [profileRevision, setProfileRevision] = useState(0);
-  const [profileNames, setProfileNames] = useState(() => {
-    try { return JSON.parse(localStorage.getItem('timetableProfileNames') || '{}') || {}; } catch { return {}; }
-  });
+  const [profileNames, setProfileNames] = useState(getSavedProfileNames);
   const [theme, setTheme] = useState(getInitialTheme);
   const [activeProfile, setActiveProfile] = useState(getSavedActiveProfile);
   const [selectedClasses, setSelectedClasses] = useState(() =>
@@ -562,6 +582,10 @@ function App() {
   // silent session-restore on every page load — see that effect's own
   // comment for why the distinction matters.
   const justSignedInRef = useRef(false);
+  const lastAccountSyncRef = useRef(null);
+  const skipNextAccountPushRef = useRef(false);
+  const accountSyncInFlightRef = useRef(false);
+  const pendingAccountSyncRef = useRef(null);
 
   const notif = useClassNotifications(timetableData);
 
@@ -618,8 +642,14 @@ function App() {
     (async () => {
       const { user, data } = await fetchGoogleSession();
       if (user) {
+        // A pre-names account needs one migration push only if this device
+        // actually has names to contribute. Otherwise do not overwrite a
+        // newer device's data just because this page was opened.
+        skipNextAccountPushRef.current = Boolean(data?.profileNames) ||
+          Object.keys(getSavedProfileNames()).length === 0;
         setAccount({ user });
         applyAccountData(data, {
+          setProfileNames,
           setTheme,
           setActiveProfile,
           setSelectedClasses,
@@ -649,12 +679,15 @@ function App() {
           extraClasses,
           activities,
           linkedSync,
-        });
+        }, profileNames);
         const { user, data, isNewAccount } = await exchangeGoogleCredential(credential, localData);
         justSignedInRef.current = true;
+        skipNextAccountPushRef.current = isNewAccount || Boolean(data?.profileNames) ||
+          Object.keys(profileNames).length === 0;
         setAccount({ user });
         if (!isNewAccount) {
           applyAccountData(data, {
+            setProfileNames,
             setTheme,
             setActiveProfile,
             setSelectedClasses,
@@ -676,12 +709,13 @@ function App() {
         setAccountNotice({ state: 'error', message: 'Sign-in failed — please try again.' });
       }
     },
-    [activeProfile, selectedClasses, overrides, extraClasses, activities, linkedSync]
+    [activeProfile, selectedClasses, overrides, extraClasses, activities, linkedSync, profileNames]
   );
 
   const handleGoogleSignOut = useCallback(async () => {
     disableGoogleAutoSelect();
     await logoutGoogleServer();
+    pendingAccountSyncRef.current = null;
     setAccount(null);
     setSettingsOpen(false);
   }, []);
@@ -744,7 +778,27 @@ function App() {
   // notification resyncs elsewhere in this app) — this is what makes
   // syncing mean "any change on any signed-in device reaches every other
   // one," not just a one-time import at sign-in.
-  const lastAccountSyncRef = useRef(null);
+  const flushAccountSync = useCallback(async () => {
+    if (accountSyncInFlightRef.current) return;
+    accountSyncInFlightRef.current = true;
+    try {
+      while (pendingAccountSyncRef.current) {
+        const next = pendingAccountSyncRef.current;
+        pendingAccountSyncRef.current = null;
+        const ok = await pushAccountSync(next.payload);
+        if (!ok) {
+          // Retain the latest local edit for the next focus/interval retry.
+          pendingAccountSyncRef.current ||= next;
+          lastAccountSyncRef.current = null;
+          break;
+        }
+        if (!pendingAccountSyncRef.current) lastAccountSyncRef.current = next.serialized;
+      }
+    } finally {
+      accountSyncInFlightRef.current = false;
+    }
+  }, []);
+
   useEffect(() => {
     if (!account) {
       lastAccountSyncRef.current = null;
@@ -756,12 +810,59 @@ function App() {
       extraClasses,
       activities,
       linkedSync,
-    });
+    }, profileNames);
     const serialized = JSON.stringify(payload);
+    if (skipNextAccountPushRef.current) {
+      skipNextAccountPushRef.current = false;
+      lastAccountSyncRef.current = serialized;
+      return;
+    }
     if (serialized === lastAccountSyncRef.current) return;
     lastAccountSyncRef.current = serialized;
-    pushAccountSync(payload);
-  }, [account, activeProfile, selectedClasses, overrides, extraClasses, activities, linkedSync, theme, profileRevision]);
+    pendingAccountSyncRef.current = { payload, serialized };
+    flushAccountSync();
+  }, [account, activeProfile, selectedClasses, overrides, extraClasses, activities, linkedSync, theme, profileNames, profileRevision, flushAccountSync]);
+
+  // Pick up edits made on another signed-in device when this tab is revisited.
+  // Keep the full account snapshot consistent, including empty named slots.
+  useEffect(() => {
+    if (!account) return;
+    let cancelled = false;
+    const refresh = async () => {
+      if (document.hidden) return;
+      if (pendingAccountSyncRef.current) await flushAccountSync();
+      if (accountSyncInFlightRef.current || pendingAccountSyncRef.current) return;
+      const session = await fetchGoogleSession();
+      if (cancelled || !session.user || !session.data || accountSyncInFlightRef.current || pendingAccountSyncRef.current) return;
+      const current = buildAccountSyncPayload(activeProfile, {
+        selectedClasses, overrides, extraClasses, activities, linkedSync,
+      }, profileNames);
+      // Which timetable is open is a device preference. A friend opening a
+      // profile on their phone should not switch this screen away from Main.
+      const remoteData = {
+        ...session.data,
+        activeProfile,
+        profileNames: session.data.profileNames || profileNames,
+      };
+      if (JSON.stringify(remoteData) === JSON.stringify(current)) return;
+      skipNextAccountPushRef.current = true;
+      applyAccountData(remoteData, {
+        setProfileNames, setTheme, setActiveProfile, setSelectedClasses,
+        setOverrides, setExtraClasses, setActivities, setLinkedSync,
+      });
+      setProfileRevision((revision) => revision + 1);
+    };
+    const onVisible = () => { if (!document.hidden) refresh(); };
+    window.addEventListener('focus', onVisible);
+    document.addEventListener('visibilitychange', onVisible);
+    const interval = window.setInterval(refresh, 60_000);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('focus', onVisible);
+      document.removeEventListener('visibilitychange', onVisible);
+      window.clearInterval(interval);
+    };
+  }, [account, activeProfile, selectedClasses, overrides, extraClasses, activities, linkedSync, profileNames, flushAccountSync]);
 
   // Persist selection under the active profile's slot (legacy key + format
   // kept for profile 1, so existing users' saved selections keep working).
@@ -1414,6 +1515,7 @@ function App() {
     () => buildSchedule(timetableData, selectedClasses, overrides, extraClasses, activities),
     [timetableData, selectedClasses, overrides, extraClasses, activities]
   );
+  const weekInsights = useMemo(() => getWeekInsights(overviewSchedule), [overviewSchedule]);
   const openSchedule = (view, day) => {
     setGridView(view);
     if (day) setGridDay(day);
@@ -1631,8 +1733,8 @@ function App() {
       <main className="app-main timetable-first" id="main-content" tabIndex={-1}>
         <button type="button" className="schedule-warning no-print" aria-label="Schedule disclaimer" aria-expanded={disclaimerExpanded} aria-controls="schedule-warning-text" onClick={() => setDisclaimerExpanded((expanded) => !expanded)}>
           <IconAlert size={22} />
-          <span className="warning-copy"><strong>Important: check your schedule</strong>
-            <span id="schedule-warning-text" hidden={!disclaimerExpanded}>This is an unofficial tool maintained independently by a student. Since data is updated manually, please cross-verify your schedule with official university announcements.</span>
+          <span className="warning-copy"><strong>Important: Please Be Aware</strong>
+            <span id="schedule-warning-text" hidden={!disclaimerExpanded}>Timetable data is Taken From Official University Source and This is an Unofficial Tool Maintained by Single Student, Please Check For Error.</span>
           </span>
           <IconChevronDown size={18} className={disclaimerExpanded ? 'is-flipped' : undefined} />
         </button>
@@ -1777,9 +1879,17 @@ function App() {
               </div>
             </div>
             <div className="selection-summary no-print" aria-label="Current class selection">
-              {linkedSync ? <span className="selection-sync">Synced · {linkedSync.type === 'rollno' ? 'Roll No' : linkedSync.type === 'teacher' ? 'Teacher' : 'Section'} <strong>{linkedSync.value}</strong></span> : <span>Selected courses <strong>{selectedClasses.length}</strong></span>}
-              <button type="button" className="insights-trigger" onClick={() => setInsightsOpen(true)} title="Weekly summary and statistics"><IconChart size={17} /> Insights</button>
-              {!linkedSync && selectedClasses.length > 0 && <span className="selection-course-names">{selectedClasses.join(' · ')}</span>}
+              {linkedSync ? <span className="selection-sync">Synced · {linkedSync.type === 'rollno' ? 'Roll No' : linkedSync.type === 'teacher' ? 'Teacher' : 'Section'} <strong>{linkedSync.value}</strong></span> : null}
+              <button type="button" className="insights-trigger" onClick={() => setInsightsOpen(true)} title="Weekly report"><IconChart size={17} /> Insights</button>
+              {selectedClasses.length > 0 && (() => {
+                const todayCount = (overviewSchedule.processedSchedule[getTodayName()] || []).filter((c) => !c.isEmpty).length;
+                return <span className="summary-chips">
+                  <span><strong>{overviewSchedule.courseCount}</strong> courses</span>
+                  <span><strong>{formatDuration(weekInsights.minutes)}</strong> / week</span>
+                  <span>{todayCount ? <><strong>{todayCount}</strong> today</> : 'Free today'}</span>
+                  {lastUpdated && <span className="summary-chip-muted">Updated {timeAgo(lastUpdated, now)}</span>}
+                </span>;
+              })()}
             </div>
             <div id="class-management" hidden={!classesOpen}>
             <ClassSelector
@@ -1875,10 +1985,10 @@ function App() {
                 selectedDay={gridDay}
               />
             </div>
-            {insightsOpen && <Modal title="Your week · insights" onClose={() => setInsightsOpen(false)}>
+            {insightsOpen && <Modal title="Weekly report" onClose={() => setInsightsOpen(false)}>
               <div className="insight-context"><span>{activeProfile === 'main' ? 'My timetable' : profileNames[activeProfile] || 'Other timetable'}</span><span>{lastUpdated ? `Data updated ${timeAgo(lastUpdated, now)}` : 'Waiting for timetable data'}</span></div>
-              <ScheduleOverview schedule={overviewSchedule} onOpenDay={(day) => { setInsightsOpen(false); openSchedule('day', day); }} onOpenAgenda={() => { setInsightsOpen(false); openSchedule('week'); }} />
-              <p className="insights-note">Scheduled time counts overlapping classes once. Breaks count only time between sessions. These statistics describe the timetable currently selected.</p>
+              <ScheduleOverview schedule={overviewSchedule} onOpenDay={(day) => { setInsightsOpen(false); openSchedule('day', day); }} />
+              <p className="insights-note">Tap a day to open it. Time counts overlapping classes once; breaks are gaps between sessions.</p>
             </Modal>}
 
             {/* Sessional-1 seatings (added 2026-09-18, on request: "make an option of

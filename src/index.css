@@ -993,6 +993,52 @@ input.reschedule-select {
   box-shadow: var(--shadow-sm);
 }
 
+.section-choice-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 9px;
+  margin-bottom: 12px;
+}
+
+.section-choice-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.section-choice-field select {
+  width: 100%;
+  min-width: 0;
+  height: 40px;
+  padding: 0 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.section-choice-field select:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.section-choice-field select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (max-width: 360px) {
+  .section-choice-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .section-choice-field:last-child { grid-column: 1 / -1; }
+}
+
 .minimize-btn {
   display: inline-flex;
   align-items: center;
@@ -1235,6 +1281,31 @@ input.reschedule-select {
   font-size: 16px;
   font-weight: 700;
   color: var(--text);
+}
+
+.course-name-toggle {
+  flex-shrink: 0;
+  margin-left: 6px;
+  padding: 5px 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  background: var(--surface-2);
+  color: var(--text-2);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.course-name-toggle:hover {
+  color: var(--accent-ink);
+  border-color: var(--accent);
+}
+
+.course-name-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 /* Wizard back button (2026-09-07) — "Adjust class times" steps through

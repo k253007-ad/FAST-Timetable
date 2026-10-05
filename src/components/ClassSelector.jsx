@@ -3,6 +3,8 @@ import { createPortal } from 'react-dom';
 import { splitClassValue, formatClassLabel, getActivityColor, withAlpha } from '../utils/courseColors.js';
 import {
   ACTIVITY_TYPES,
+  abbreviateCourse,
+  buildCourseCodeMap,
   buildMoveOverrides,
   cleanRoom,
   DAY_ORDER,
@@ -31,7 +33,7 @@ const CUSTOM_ACTIVITY_KEY = 'customActivityTypes';
 // any more, so this is a deliberate allowlist, not "whatever prefixes
 // happen to appear in the data today." Update this list when a new intake
 // year starts (or an old one should stop being offered).
-const ROLL_NO_PREFIXES = ['21K', '22K', '23K', '24K', '25K', '26K'];
+const ROLL_NO_PREFIXES = ['20K', '21K', '22K', '23K', '24K', '25K', '26K'];
 const ROLL_NO_MAX = 9999;
 
 const getSavedCustomActivityNames = () => {
@@ -53,7 +55,7 @@ const saveCustomActivityNames = (names) => {
 
 // Memoized so toggling one checkbox doesn't force React to re-diff every
 // other row in a list that can run into the hundreds (all courses, unfiltered).
-const CourseOptionRow = memo(({ value, checked, onToggle }) => {
+const CourseOptionRow = memo(({ value, displayCourse, checked, onToggle }) => {
   const { course, section } = splitClassValue(value);
   return (
     <label className={`option-row${checked ? ' is-checked' : ''}`}>
@@ -65,7 +67,7 @@ const CourseOptionRow = memo(({ value, checked, onToggle }) => {
         onChange={onToggle}
       />
       <span className="option-text">
-        <span className="option-course">{course}</span>
+        <span className="option-course">{displayCourse || course}</span>
         {section && <span className="option-section">{section}</span>}
       </span>
     </label>
@@ -282,7 +284,7 @@ const ActivityTypeDropdown = ({ builtIns, customTypes, activityType, isCustomAct
 // `position: fixed` div nested deep in the card could otherwise hit).
 // Replaces the separate per-section (i) Info popovers, which were dropped
 // as part of the same request.
-export const Modal = ({ title, onBack, onClose, children }) => {
+export const Modal = ({ title, titleAction, onBack, onClose, children }) => {
   useEffect(() => {
     const onKeyDown = (e) => {
       if (e.key === 'Escape') onClose();
@@ -316,6 +318,7 @@ export const Modal = ({ title, onBack, onClose, children }) => {
             <h3 className="modal-title" id={titleId}>
               {title}
             </h3>
+            {titleAction}
           </div>
           <button type="button" className="modal-close" onClick={onClose} aria-label="Close">
             <IconX size={18} />
@@ -357,7 +360,7 @@ const GroupOptionRow = memo(({ name, count, checked, onToggle }) => (
 ));
 GroupOptionRow.displayName = 'GroupOptionRow';
 
-// Roll No / Section mode rows — no checkbox: clicking a row directly makes
+// Teacher mode rows — no checkbox: clicking a row directly makes
 // it the profile's synced source (replacing whatever's currently selected),
 // rather than toggling its classes in/out of an independent selection. See
 // the "keep synced" doc comment below for why there's no separate
@@ -699,7 +702,11 @@ const ClassSelector = ({
   const [confirmAction, setConfirmAction] = useState(null); // 'clear' | 'resync' | null
   const [mode, setMode] = useState('rollno'); // 'rollno' | 'teacher' | 'section' — see the doc comment above re: 'manual'
   const [query, setQuery] = useState('');
-  const [groupQuery, setGroupQuery] = useState(''); // shared search box for roll no / teacher / section tabs
+  const [shortCourseNames, setShortCourseNames] = useState(false);
+  const [groupQuery, setGroupQuery] = useState(''); // shared search box for roll no / teacher tabs
+  const [sectionCourse, setSectionCourse] = useState('');
+  const [sectionSemester, setSectionSemester] = useState('');
+  const [rollPrefix, setRollPrefix] = useState('25K'); // intake year for the 4-digit roll search
   // "One-time" (2026-09-10): shown once when a ghost roll number is picked,
   // cleared on the next search/mode change/successful sync rather than
   // persisting indefinitely — see `handleSyncSelect`/`switchMode`.
@@ -745,8 +752,8 @@ const ClassSelector = ({
 
   useDismissOnOutside(showSyncInfo, () => setShowSyncInfo(false), syncBadgeRef);
 
-  // Close on outside click / Escape while the group (Roll No/Section/
-  // Teacher) dropdown is open. "Outside" means outside the search box +
+  // Close on outside click / Escape while the group (Roll No/Teacher)
+  // dropdown is open. "Outside" means outside the search box +
   // its panel — not just outside the whole card — so clicking elsewhere in
   // "My classes" (title, tabs, chips) closes it too. `mode` is always one
   // of those three whenever `open` applies here — the Course search box
@@ -775,15 +782,44 @@ const ClassSelector = ({
     };
   }, [open]);
 
-  // Every whitespace-separated token must match, so "cs4048 6b" works.
+  const courseCodes = useMemo(() => {
+    const byCourse = new Map();
+    buildCourseCodeMap(data?.timetable || []).forEach((course, code) => byCourse.set(course, code));
+    (data?.timetable || []).forEach((item) => {
+      if (item.CourseCode) byCourse.set(item.Course, item.CourseCode);
+    });
+    return byCourse;
+  }, [data?.timetable]);
+  const displayCourse = useCallback((course) => {
+    if (!shortCourseNames) return course;
+    return courseCodes.get(course) || abbreviateCourse(course);
+  }, [courseCodes, shortCourseNames]);
+  const displayClass = (value) => {
+    const { course, section } = splitClassValue(value);
+    return section ? `${displayCourse(course)} (${section})` : displayCourse(course);
+  };
+  const courseNameToggle = (
+    <button
+      type="button"
+      className="course-name-toggle"
+      onClick={() => setShortCourseNames((current) => !current)}
+      aria-label={shortCourseNames ? 'Show full course names' : 'Show short course names'}
+      title={shortCourseNames ? 'Show full course names' : 'Show short course names'}
+    >
+      {shortCourseNames ? 'Full Course Name' : 'Short Course Name'}
+    </button>
+  );
+
+  // Search only the names currently shown in the picker, plus sections.
   const filtered = useMemo(() => {
     const tokens = query.toLowerCase().split(/\s+/).filter(Boolean);
     if (tokens.length === 0) return allClasses;
     return allClasses.filter((value) => {
-      const haystack = value.toLowerCase();
+      const { course, section } = splitClassValue(value);
+      const haystack = `${displayCourse(course)} ${section}`.toLowerCase();
       return tokens.every((t) => haystack.includes(t));
     });
-  }, [allClasses, query]);
+  }, [allClasses, displayCourse, query]);
 
   // A stable callback (reads the toggled value off the event instead of
   // closing over it per-row) so every row can share one function reference —
@@ -1030,6 +1066,30 @@ const ClassSelector = ({
     };
   }, [data]);
 
+  const sectionChoices = useMemo(() => {
+    const byCourse = new Map();
+    sectionGroups.forEach((group) => {
+      const match = group.name.match(/^([A-Za-z]+)-(\d+)([A-Za-z][A-Za-z0-9]*)$/);
+      if (!match) return;
+      const [, course, semester, section] = match;
+      if (!byCourse.has(course)) byCourse.set(course, new Map());
+      const semesters = byCourse.get(course);
+      if (!semesters.has(semester)) semesters.set(semester, []);
+      semesters.get(semester).push({ name: group.name, section });
+    });
+    return byCourse;
+  }, [sectionGroups]);
+  const sectionCourses = useMemo(() => [...sectionChoices.keys()].sort(), [sectionChoices]);
+  const sectionSemesters = useMemo(
+    () => [...(sectionChoices.get(sectionCourse)?.keys() || [])].sort((a, b) => Number(a) - Number(b)),
+    [sectionChoices, sectionCourse]
+  );
+  const sectionOptions = useMemo(
+    () => [...(sectionChoices.get(sectionCourse)?.get(sectionSemester) || [])]
+      .sort((a, b) => a.section.localeCompare(b.section, undefined, { numeric: true })),
+    [sectionChoices, sectionCourse, sectionSemester]
+  );
+
   // Ghost-fills Roll No mode's list (2026-09-10, on request) — every roll
   // number in the allowed intake range (ROLL_NO_PREFIXES x 0001-9999) is a
   // real, listed row: a roll number with real data uses its real entry, one
@@ -1069,24 +1129,21 @@ const ClassSelector = ({
       return groupQuery.trim().length >= 2 ? rollNoUniverse : rollNoGroups;
     }
     if (mode === 'teacher') return instructorGroups;
-    if (mode === 'section') return sectionGroups;
     return [];
-  }, [mode, rollNoUniverse, rollNoGroups, instructorGroups, sectionGroups, groupQuery]);
+  }, [mode, rollNoUniverse, rollNoGroups, instructorGroups, groupQuery]);
 
   const filteredGroups = useMemo(() => {
     const tokens = groupQuery.toLowerCase().split(/\s+/).filter(Boolean);
-    if (tokens.length === 0) return groups;
-    return groups.filter((group) => {
+    const pool = mode === 'rollno' && rollPrefix ? groups.filter((g) => g.name.startsWith(`${rollPrefix}-`)) : groups;
+    if (tokens.length === 0) return pool;
+    return pool.filter((group) => {
       const haystack = group.name.toLowerCase();
       return tokens.every((t) => haystack.includes(t));
     });
-  }, [groups, groupQuery]);
+  }, [groups, groupQuery, mode, rollPrefix]);
 
-  // Picking a row in Roll No/Section mode sets it as the profile's synced
-  // source — App.jsx's effect then replaces the whole selection with that
-  // group's live classes (see the "Keep synced" doc comment above). `mode`
-  // is either 'rollno' or 'section' at every call site this is wired to, so
-  // it doubles directly as `linkedSync.type`.
+  // Picking a teacher row sets it as the profile's synced source — App.jsx
+  // then replaces the selection with that teacher's live classes.
   //
   // A ghost roll number (2026-09-10, see `rollNoUniverse` above) still
   // syncs like any other pick (on request: "when clicked on ghost ones it
@@ -1112,6 +1169,18 @@ const ClassSelector = ({
     },
     [mode, realRollNoNames, setLinkedSync]
   );
+
+  // Roll No: year picker + exactly 4 digits + tick → sync straight to that
+  // roll number (2026-09-28, on request — no results list in this mode).
+  const rollDigitsReady = mode === 'rollno' && /^\d{4}$/.test(groupQuery);
+  const syncTypedRollNo = () => {
+    if (!rollDigitsReady) return;
+    const value = `${rollPrefix}-${groupQuery}`;
+    setNoDataMessage(realRollNoNames.has(value) ? '' : 'Your Courses data is not Present, Please Select Your Courses');
+    setLinkedSync({ type: 'rollno', value });
+    setGroupQuery('');
+    setOpen(false);
+  };
 
   const switchMode = (nextMode) => {
     setMode(nextMode);
@@ -1155,18 +1224,15 @@ const ClassSelector = ({
   // own timetable, and the one class notifications are computed from
   // regardless of which slot is open here (see App.jsx / useClassNotifications).
 
-  const groupUnitLabel =
-    mode === 'rollno' ? 'roll numbers' : mode === 'section' ? 'sections' : 'instructors';
+  const groupUnitLabel = mode === 'rollno' ? 'roll numbers' : 'instructors';
   const groupPlaceholder =
     mode === 'teacher'
       ? 'Search instructor name'
       : mode === 'rollno'
         ? 'Search - e.g “3068 or 3041”'
-        : mode === 'section'
-          ? 'Search - e.g “BCS-1A or BSE-1C”'
-          : 'Search';
+        : 'Search';
   const groupAriaLabel =
-    mode === 'rollno' ? 'Search roll numbers' : mode === 'section' ? 'Search sections' : 'Search instructors';
+    mode === 'rollno' ? 'Search roll numbers' : 'Search instructors';
 
   return (
     <>
@@ -1233,6 +1299,17 @@ const ClassSelector = ({
               aria-label={`Synced with ${linkedSync.type === 'rollno' ? 'Roll No' : linkedSync.type === 'teacher' ? 'Teacher' : 'Section'} ${linkedSync.value} — press for info and to cancel syncing`}
             >
               {linkedSync.type === 'rollno' ? 'Roll No' : linkedSync.type === 'teacher' ? 'Teacher' : 'Section'} {linkedSync.value}
+            </button>
+            <button
+              type="button"
+              className="synced-cancel-btn"
+              onClick={() => {
+                setLinkedSync(null);
+                setShowSyncInfo(false);
+              }}
+              title="Stop auto-updating; your current classes stay"
+            >
+              Cancel sync
             </button>
             {showSyncInfo && (
               <div className="info-popover" role="tooltip">
@@ -1301,7 +1378,7 @@ const ClassSelector = ({
       </div>
 
       {showCourseSearch && (
-        <Modal title="Search courses" onClose={() => setShowCourseSearch(false)}>
+        <Modal title="Search courses" titleAction={courseNameToggle} onClose={() => setShowCourseSearch(false)}>
           <div className="combobox">
             <input
               ref={inputRef}
@@ -1351,6 +1428,7 @@ const ClassSelector = ({
                     <CourseOptionRow
                       key={value}
                       value={value}
+                      displayCourse={displayCourse(splitClassValue(value).course)}
                       checked={selectedClasses.includes(value)}
                       onToggle={handleToggleClass}
                     />
@@ -1369,27 +1447,86 @@ const ClassSelector = ({
         </p>
       )}
 
-      {        !linkedSync &&
-        (mode === 'rollno' || mode === 'teacher' || mode === 'section') &&
+      {!linkedSync && mode === 'section' && (
+        <div className="section-choice-row" aria-label="Section selection">
+          <label className="section-choice-field">
+            <span>Course</span>
+            <select value={sectionCourse} onChange={(e) => {
+              setSectionCourse(e.target.value);
+              setSectionSemester('');
+            }} aria-label="Course">
+              <option value="">Course</option>
+              {sectionCourses.map((course) => <option key={course} value={course}>{course}</option>)}
+            </select>
+          </label>
+          <label className="section-choice-field">
+            <span>Semester</span>
+            <select value={sectionSemester} disabled={!sectionCourse} onChange={(e) => setSectionSemester(e.target.value)} aria-label="Semester">
+              <option value="">Semester</option>
+              {sectionSemesters.map((semester) => <option key={semester} value={semester}>{semester}</option>)}
+            </select>
+          </label>
+          <label className="section-choice-field">
+            <span>Section</span>
+            <select value="" disabled={!sectionSemester} onChange={(e) => {
+              if (e.target.value) setLinkedSync({ type: 'section', value: e.target.value });
+            }} aria-label="Section">
+              <option value="">Section</option>
+              {sectionOptions.map(({ name, section }) => <option key={name} value={name}>{section}</option>)}
+            </select>
+          </label>
+        </div>
+      )}
+
+      {!linkedSync &&
+        (mode === 'rollno' || mode === 'teacher') &&
         (mode !== 'rollno' || hasRollData) && (
         <div className="combobox" ref={comboboxRef}>
+          <div className={mode === 'rollno' ? 'roll-search-row' : undefined}>
+          {mode === 'rollno' && (
+            <select
+              className="roll-prefix-select"
+              value={rollPrefix}
+              aria-label="Intake year"
+              onChange={(e) => {
+                setRollPrefix(e.target.value);
+                setOpen(true);
+                groupInputRef.current?.focus();
+              }}
+            >
+              {ROLL_NO_PREFIXES.map((pfx) => (
+                <option key={pfx} value={pfx}>{pfx}</option>
+              ))}
+            </select>
+          )}
           <input
             ref={groupInputRef}
             type="search"
             enterKeyHint="search"
             className="combobox-input"
-            placeholder={groupPlaceholder}
+            placeholder={mode === 'rollno' ? '4-digit roll no, e.g. 3068' : groupPlaceholder}
+            inputMode={mode === 'rollno' ? 'numeric' : undefined}
             value={groupQuery}
             disabled={!hasData}
             onChange={(e) => {
-              setGroupQuery(e.target.value);
+              const raw = e.target.value;
+              const full = mode === 'rollno' && raw.match(/(\d{2})\s*k\s*-?\s*(\d{4})/i);
+              if (full && ROLL_NO_PREFIXES.includes(`${full[1]}K`)) {
+                setRollPrefix(`${full[1]}K`);
+                setGroupQuery(full[2]);
+              } else {
+                setGroupQuery(mode === 'rollno' ? raw.replace(/\D/g, '').slice(0, 4) : raw);
+              }
               setNoDataMessage('');
               setOpen(true);
             }}
             onFocus={() => setOpen(true)}
             onClick={() => setOpen(true)}
             onKeyDown={(e) => {
-              if (e.key === 'Enter') e.target.blur();
+              if (e.key === 'Enter') {
+                if (mode === 'rollno') syncTypedRollNo();
+                e.target.blur();
+              }
             }}
             role="combobox"
             aria-expanded={open}
@@ -1398,15 +1535,23 @@ const ClassSelector = ({
             autoComplete="off"
             spellCheck="false"
           />
-          <SearchAction
-            query={groupQuery}
-            onClear={() => {
-              setGroupQuery('');
-              groupInputRef.current?.focus();
-            }}
-          />
+          {rollDigitsReady && (
+            <button type="button" className="roll-sync-btn" onClick={syncTypedRollNo} aria-label={`Sync to ${rollPrefix}-${groupQuery}`} title={`Sync to ${rollPrefix}-${groupQuery}`}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m5 12 4 4L19 6" /></svg>
+            </button>
+          )}
+          </div>
+          {mode !== 'rollno' && (
+            <SearchAction
+              query={groupQuery}
+              onClear={() => {
+                setGroupQuery('');
+                groupInputRef.current?.focus();
+              }}
+            />
+          )}
 
-          {open && hasData && (
+          {open && hasData && mode !== 'rollno' && (
             <div
               className="combobox-panel"
               id={groupPanelId}
@@ -1485,7 +1630,7 @@ const ClassSelector = ({
       )}
 
       {showChips && (
-        <Modal title="Select courses" onClose={() => setShowChips(false)}>
+        <Modal title="Select courses" titleAction={courseNameToggle} onClose={() => setShowChips(false)}>
           <button type="button" className="action-btn-blue selector-add-courses-btn" onClick={openCourseSearch}>
             Add courses
           </button>
@@ -1499,7 +1644,7 @@ const ClassSelector = ({
                       className="chip-dot"
                       style={{ backgroundColor: courseColors[course] || 'var(--text-3)' }}
                     />
-                    <span className="chip-label">{formatClassLabel(value)}</span>
+                    <span className="chip-label">{displayClass(value)}</span>
                     <button
                       type="button"
                       className="chip-remove"

@@ -27,9 +27,53 @@ import { buildCourseCodeMap } from '../utils/schedule.js';
  * parentheses (e.g. "Understanding Sirat-Un-Nabi (PBUH)") is no longer
  * ambiguous with the section marker.
  */
-const parseCellValue = (cellValue) => {
+export const parseCellValue = (cellValue) => {
   if (!cellValue) {
     return {};
+  }
+  // The newer public timetable uses "CODE,SECTION, Course, Instructor, 38 st".
+  // Courses can wrap onto multiple lines, so normalize whitespace first.
+  const compact = String(cellValue).replace(/\s+/g, ' ').trim();
+  if (/^reserved\s+for\b/i.test(compact)) {
+    const booking = compact.replace(/^reserved\s+for\s*/i, '').split(/reserved\s+for/i)[0].trim();
+    const month = '(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)';
+    const datePattern = new RegExp(`\\b(?:${month}\\s+\\d{1,2}(?:\\s*,\\s*\\d{1,2})*|\\d{1,2}\\s+${month})(?:\\s*,?\\s+20\\d{2})?\\b`, 'i');
+    const date = datePattern.exec(booking);
+    const withoutDate = booking.replace(datePattern, ' ').replace(/\s+/g, ' ').trim();
+    const sectionPattern = /\bB[A-Z]{2,3}\s*-?\s*\d{1,2}[A-Z]\b(?:\s*\/\s*\d{1,2}[A-Z]\b)*/i;
+    const sectionMatch = sectionPattern.exec(withoutDate);
+    const section = sectionMatch ? sectionMatch[0].replace(/\s*-?\s*(\d)/, '-$1').toUpperCase() : 'N/A';
+    const beforeDate = date ? booking.slice(0, date.index).trim() : withoutDate;
+    const beforeSection = beforeDate.split(sectionPattern)[0].trim();
+    const shortCourse = beforeSection.match(/\s+([A-Z]{2,8}(?:-Lab)?)$/);
+    const instructor = beforeSection
+      .replace(/\s+([A-Z]{2,8}(?:-Lab)?)$/, '')
+      .replace(/\bLab\s+(?:Mid\s+)?Exam\b/ig, '')
+      .replace(/[\s,;]+$/, '').trim();
+    let course = sectionMatch
+      ? withoutDate.slice(sectionMatch.index + sectionMatch[0].length)
+      : (date ? booking.slice(date.index + date[0].length) : '');
+    course = course.replace(/\bLab\s+(?:Mid\s+)?Exam\b/ig, '')
+      .replace(/^[\s,;:/-]+|[\s,;:/-]+$/g, '').trim();
+    // A course can precede its section: "Data Structures of BSBA-5A".
+    if (!course && sectionMatch && date) {
+      course = withoutDate.slice(beforeDate.length, sectionMatch.index)
+        .replace(/\bLab\s+(?:Mid\s+)?Exam\b/ig, '')
+        .replace(/\s+of\s*$/i, '').replace(/^[\s,;:/-]+|[\s,;:/-]+$/g, '').trim();
+    }
+    return { course: course || shortCourse?.[1] || 'Extra class', section, instructor: instructor || 'N/A', isExtra: true, isReserved: true };
+  }
+  const commaParts = compact.split(',').map((part) => part.trim());
+  if (commaParts.length >= 4 && /^[A-Z]{2,}\d{3,}[A-Z]?$/i.test(commaParts[0])) {
+    const withoutCount = /^(?:\d+\s*st(?:udents?)?|\d+)$/i.test(commaParts.at(-1))
+      ? commaParts.slice(0, -1)
+      : commaParts;
+    return {
+      course: withoutCount.slice(2, -1).join(', ').trim(),
+      courseCode: withoutCount[0],
+      section: withoutCount[1] || 'N/A',
+      instructor: withoutCount.at(-1) || 'N/A',
+    };
   }
   const parts = cellValue.split('\n');
   const course = (parts[0] || '').trim();
@@ -68,7 +112,7 @@ const fetchSheet = async (sheetUrl, sheetInfo) => {
     }
 
     const rows = json.table.rows;
-    const day = sheetInfo.name;
+    const day = sheetInfo.name.charAt(0).toUpperCase() + sheetInfo.name.slice(1).toLowerCase();
     const entries = [];
 
     // Row 0: slot numbers · Row 1: "Venues/time" + slot headers · Row 2+: rooms.
@@ -84,15 +128,17 @@ const fetchSheet = async (sheetUrl, sheetInfo) => {
         if (colIndex < 1) return;
 
         if (cell?.v && timeSlotHeaders[colIndex - 1]) {
-          const { course, section, instructor } = parseCellValue(cell.v);
+          const { course, courseCode, section, instructor, isExtra, isReserved } = parseCellValue(cell.v);
           if (course) {
             entries.push({
               Course: course,
+              ...(courseCode ? { CourseCode: courseCode } : {}),
               Section: section,
               Instructor: instructor,
               Room: room,
               Day: day,
               Time: timeSlotHeaders[colIndex - 1],
+              ...(isReserved ? { isExtra, isReserved } : {}),
             });
           }
         }
@@ -225,6 +271,23 @@ export const buildTimetableFromMeta = async (metaJson) => {
 
   // Saturday tabs exist in the sheet but aren't part of the regular week.
   allTimetableData = allTimetableData.filter((item) => item.Day !== 'Saturday');
+
+  // Resolve reservation shorthand against regular courses, never against
+  // other reservations (which can themselves contain unresolved shorthand).
+  const regularCourses = allTimetableData.filter((item) => !item.isReserved);
+  const namesByCode = buildCourseCodeMap(regularCourses);
+  regularCourses.forEach((item) => {
+    if (item.CourseCode) namesByCode.set(item.CourseCode, item.Course);
+  });
+  const officialCodes = new Map(regularCourses
+    .filter((item) => item.CourseCode)
+    .map((item) => [item.Course, item.CourseCode]));
+  allTimetableData = allTimetableData.map((item) => {
+    if (!item.isReserved) return item;
+    const course = namesByCode.get(item.Course) || item.Course;
+    return { ...item, Course: course,
+      ...(officialCodes.has(course) ? { CourseCode: officialCodes.get(course) } : {}) };
+  });
 
   if (allTimetableData.length === 0) {
     if (sheetsProcessed === 0) {

@@ -596,7 +596,11 @@ export const buildSchedule = (data, selectedClasses, overrides = [], extraClasse
 
   const filteredData = [
     ...applyOverrides(
-      data.timetable.filter((item) => selectedClasses.includes(`${item.Course} - ${item.Section}`)),
+      data.timetable
+        .filter((item) => selectedClasses.includes(`${item.Course} - ${item.Section}`))
+        .map((item) => /^reserved\s+for\b/i.test((item.Course || '').trim())
+          ? { ...item, isExtra: true, isReserved: true }
+          : item),
       overrides
     ),
     ...buildExtraRows(data, extraClasses),
