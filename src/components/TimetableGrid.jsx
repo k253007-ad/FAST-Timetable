@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useMemo, useRef } from 'react';
 import { splitClassValue, withAlpha, getActivityColor } from '../utils/courseColors.js';
-import { buildSchedule, cleanRoom, formatSlot } from '../utils/schedule.js';
+import { abbreviateCourse, buildSchedule, cleanRoom, formatSlot } from '../utils/schedule.js';
 import { IconAlert, IconCalendar } from './Icons.jsx';
 
 // A course name that's too long for its box used to just get silently
@@ -72,6 +72,7 @@ const slotRangeLabel = (timeSlots, startSlot, span) => {
 // via the .exporting/@media print overrides in index.css — see the
 // hard-constraint comment there.
 const TimetableGrid = ({
+  shortCourseNames = false,
   data,
   selectedClasses,
   overrides,
@@ -113,7 +114,7 @@ const TimetableGrid = ({
       observer.disconnect();
       window.removeEventListener('beforeprint', refit);
     };
-  }, [processedSchedule, viewMode]);
+  }, [processedSchedule, viewMode, shortCourseNames]);
 
   if (!data?.timetable) return null;
 
@@ -266,7 +267,7 @@ const TimetableGrid = ({
         title={`${classItem.Course} · ${cleanRoom(classItem.Room)}${hasSection ? ` · ${classItem.Section}` : ''} · ${classItem.Instructor}${extraSuffix}`}
       >
         {classItem.isExtra && <span className="extra-badge">Extra</span>}
-        <span className="class-course">{classItem.Course}</span>
+        <span className="class-course">{shortCourseNames ? abbreviateCourse(classItem.Course) : classItem.Course}</span>
         <span className="class-meta">{cleanRoom(classItem.Room)}</span>
         {hasSection && <span className="class-meta">{classItem.Section}</span>}
         <span className="class-meta">{classItem.Instructor}</span>
@@ -284,7 +285,7 @@ const TimetableGrid = ({
                 className="legend-dot"
                 style={{ backgroundColor: courseColors[course] }}
               />
-              {course}
+              {shortCourseNames ? abbreviateCourse(course) : course}
             </li>
           ))}
         </ul>

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { buildSchedule, cleanRoom, abbreviateCourse, sessionKey } from '../utils/schedule.js';
+import { getWeekKey, getWeeklyChoices } from '../utils/weeklyChoices.js';
 import {
   registerServiceWorker,
   notificationPermission,
@@ -82,6 +83,7 @@ export const getMainSchedule = () => ({
   overrides: getMainOverrides(),
   extraClasses: getMainExtras(),
   activities: getMainActivities(),
+  weeklyAttendance: { week: getWeekKey(), choices: getWeeklyChoices('main') },
 });
 
 const formatCountdown = (mins) => {
@@ -282,7 +284,7 @@ export const useClassNotifications = (data) => {
       const mainOverrides = getMainOverrides();
       const mainExtras = getMainExtras();
       const mainActivities = getMainActivities();
-      const { processedSchedule } = buildSchedule(data, mainClasses, mainOverrides, mainExtras, mainActivities);
+      const { processedSchedule } = buildSchedule(data, mainClasses, mainOverrides, mainExtras, mainActivities, getWeeklyChoices('main'));
 
       // Keep the "Sync to Google Calendar" live feed current — independent
       // of notification permission/push entirely, only gated on whether the
@@ -318,7 +320,8 @@ export const useClassNotifications = (data) => {
       // missing subscription, or /api/subscribe rejecting) forever, since
       // the payload-changed check would then never trigger a retry.
       if (notifyingEnabled && notificationPermission() === 'granted' && isPushSupported()) {
-        const schedule = { selectedClasses: mainClasses, overrides: mainOverrides, extraClasses: mainExtras, activities: mainActivities };
+        const schedule = { selectedClasses: mainClasses, overrides: mainOverrides, extraClasses: mainExtras, activities: mainActivities,
+          weeklyAttendance: { week: getWeekKey(), choices: getWeeklyChoices('main') } };
         const payload = JSON.stringify(schedule);
         if (payload !== pushSyncedRef.current) {
           navigator.serviceWorker
@@ -400,7 +403,7 @@ export const useClassNotifications = (data) => {
       if (!notifyingEnabled || notificationPermission() !== 'granted') return;
       // Push (api/notify-tick.js) already covers this device — firing here
       // too would show every notification twice while the app is open.
-      if (pushActiveRef.current) return;
+      if (import.meta.env.VITE_LOCAL_NOTIFICATION_FALLBACK !== 'true' || pushActiveRef.current) return;
 
       // Class just started.
       if (currentInfo && notifiedNowKeyRef.current !== currentInfo.key) {

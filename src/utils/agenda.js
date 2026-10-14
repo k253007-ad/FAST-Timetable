@@ -1,4 +1,4 @@
-import { DAY_ORDER } from './schedule.js';
+import { abbreviateCourse, DAY_ORDER } from './schedule.js';
 export const DAY_LABELS = { Monday: 'M', Tuesday: 'T', Wednesday: 'W', Thursday: 'Th', Friday: 'F' };
 
 // Work from merged cells so labs, overrides, and clashes match the grid.
@@ -25,7 +25,7 @@ export const getWeekInsights = (schedule) => {
 
 export const matchesAgendaQuery = (cell, query) => {
   const text = cell.classes.map((item) =>
-    [item.Course, item.Section, item.Room, item.Instructor].filter(Boolean).join(' ')
+    [item.Course, item.isActivity ? '' : abbreviateCourse(item.Course), item.Section, item.Room, item.Instructor].filter(Boolean).join(' ')
   ).join(' ').toLowerCase();
   return query.toLowerCase().trim().split(/\s+/).every((token) => text.includes(token));
 };

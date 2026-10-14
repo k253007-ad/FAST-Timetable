@@ -9,6 +9,40 @@
 
 import { buildCourseCodeMap } from '../utils/schedule.js';
 
+const MONTH = '(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)';
+const BOOKING_DATES = new RegExp(`\\b(?:${MONTH}\\s+\\d{1,2}|\\d{1,2}\\s+${MONTH})(?:\\s*[,/+&]\\s*\\d{1,2}(?!\\d)(?:\\s+${MONTH})?)*(?:\\s*,?\\s+20\\d{2})?\\b`, 'gi');
+const BOOKING_SECTIONS = /\b(B[A-Z]{2,3})\s*-?\s*(\d{1,2}[A-Z]\d?)\b((?:\s*\/\s*\d{1,2}[A-Z]\d?\b)*)/gi;
+
+const parseReservation = (raw) => {
+  const booking = raw.replace(/^reserved(?:\s+for)?\s*/i, '').trim();
+  const dates = [...booking.matchAll(BOOKING_DATES)];
+  const sections = [...booking.matchAll(BOOKING_SECTIONS)];
+  const boundary = Math.min(dates[0]?.index ?? booking.length, sections[0]?.index ?? booking.length);
+  let instructor = booking.slice(0, boundary).replace(/\s+Sec\s*$/i, '').trim();
+  const shorthand = instructor.match(/\s+([A-Z]{2,8}(?:\s*-?\s*Lab)?)$/);
+  if (shorthand) instructor = instructor.slice(0, shorthand.index).trim();
+  instructor = instructor.replace(new RegExp(`\\s+${MONTH}\\s*$`, 'i'), '').trim();
+  let course = booking.slice(boundary)
+    .replace(BOOKING_DATES, ' ').replace(BOOKING_SECTIONS, ' ')
+    .replace(/\b\d{2}K\s*-\s*\d{4}\b/gi, ' ')
+    .replace(/\bLab\s+(?:Mid\s+)?Exam\b/gi, ' ')
+    .replace(/\s+of\s*$/i, '').replace(/^[\s.,;:/+&-]+|[\s.,;:/+&-]+$/g, '')
+    .replace(/\s+/g, ' ').trim();
+  if (!/[A-Za-z]/.test(course)) course = '';
+  course ||= shorthand?.[1] || '';
+  const sectionNames = sections.flatMap((match) =>
+    [match[2], ...match[3].split('/').map((section) => section.trim()).filter(Boolean)]
+      .map((section) => `${match[1]}-${section}`.toUpperCase()));
+  return (sectionNames.length ? [...new Set(sectionNames)] : ['N/A']).map((section) => ({
+    course, section, instructor: instructor || 'N/A', isExtra: true, isReserved: true,
+    bookingText: booking || 'Reserved',
+  }));
+};
+
+const courseReferenceKey = (value) => String(value || '').toLowerCase()
+  .replace(/\([A-Z]{2,8}\)/gi, '').replace(/\bclass\b/g, '')
+  .replace(/[^a-z0-9]/g, '');
+
 /**
  * Parses the multi-line string from a cell in the Google Sheet.
  * Expected format (changed 2026-08-30 — the sheet itself was reformatted for
@@ -27,55 +61,43 @@ import { buildCourseCodeMap } from '../utils/schedule.js';
  * parentheses (e.g. "Understanding Sirat-Un-Nabi (PBUH)") is no longer
  * ambiguous with the section marker.
  */
-export const parseCellValue = (cellValue) => {
+export const parseCellValues = (cellValue) => {
+  if (!cellValue) return [];
+  const compact = String(cellValue).replace(/\s+/g, ' ').trim();
+  if (/^reserved\b/i.test(compact)) {
+    return compact.split(/\s*(?:&\s*)?(?=reserved\s+for\b)/i).filter(Boolean).flatMap(parseReservation);
+  }
+  if (/^maintenance\b/i.test(compact)) {
+    return [{ course: '', section: 'N/A', instructor: 'N/A', isReserved: true, bookingText: compact }];
+  }
+  if (!/[A-Za-z]/.test(compact)) return [];
+  // A venue can contain multiple course/section bookings. Match headers,
+  // rather than newlines: course names also wrap across lines in this sheet.
+  const headers = [...compact.matchAll(/\b([A-Z]{2,}\d{3,}[A-Z]?)\s*,?\s*(B[A-Z]{2,3}-\d{1,2}[A-Z]\d?)\s*,\s*/gi)];
+  if (!headers.length || headers[0].index !== 0) return [parseLegacyCellValue(cellValue)];
+  return headers.map((header, index) => {
+    const body = compact.slice(header.index + header[0].length, headers[index + 1]?.index)
+      .replace(/[\s,"']+$/, '')
+      .replace(/,\s*\d+\s*,?\s*(?:st(?:udents?)?)?\s*$/i, '')
+      .trim();
+    const [course, ...teacher] = body.split(',').map((part) => part.trim());
+    return {
+      course,
+      courseCode: header[1],
+      section: header[2],
+      instructor: teacher.filter(Boolean).join(' ') || 'N/A',
+    };
+  });
+};
+
+export const parseCellValue = (cellValue) => parseCellValues(cellValue)[0] || {};
+
+const parseLegacyCellValue = (cellValue) => {
   if (!cellValue) {
     return {};
   }
-  // The newer public timetable uses "CODE,SECTION, Course, Instructor, 38 st".
-  // Courses can wrap onto multiple lines, so normalize whitespace first.
-  const compact = String(cellValue).replace(/\s+/g, ' ').trim();
-  if (/^reserved\s+for\b/i.test(compact)) {
-    const booking = compact.replace(/^reserved\s+for\s*/i, '').split(/reserved\s+for/i)[0].trim();
-    const month = '(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)';
-    const datePattern = new RegExp(`\\b(?:${month}\\s+\\d{1,2}(?:\\s*,\\s*\\d{1,2})*|\\d{1,2}\\s+${month})(?:\\s*,?\\s+20\\d{2})?\\b`, 'i');
-    const date = datePattern.exec(booking);
-    const withoutDate = booking.replace(datePattern, ' ').replace(/\s+/g, ' ').trim();
-    const sectionPattern = /\bB[A-Z]{2,3}\s*-?\s*\d{1,2}[A-Z]\b(?:\s*\/\s*\d{1,2}[A-Z]\b)*/i;
-    const sectionMatch = sectionPattern.exec(withoutDate);
-    const section = sectionMatch ? sectionMatch[0].replace(/\s*-?\s*(\d)/, '-$1').toUpperCase() : 'N/A';
-    const beforeDate = date ? booking.slice(0, date.index).trim() : withoutDate;
-    const beforeSection = beforeDate.split(sectionPattern)[0].trim();
-    const shortCourse = beforeSection.match(/\s+([A-Z]{2,8}(?:-Lab)?)$/);
-    const instructor = beforeSection
-      .replace(/\s+([A-Z]{2,8}(?:-Lab)?)$/, '')
-      .replace(/\bLab\s+(?:Mid\s+)?Exam\b/ig, '')
-      .replace(/[\s,;]+$/, '').trim();
-    let course = sectionMatch
-      ? withoutDate.slice(sectionMatch.index + sectionMatch[0].length)
-      : (date ? booking.slice(date.index + date[0].length) : '');
-    course = course.replace(/\bLab\s+(?:Mid\s+)?Exam\b/ig, '')
-      .replace(/^[\s,;:/-]+|[\s,;:/-]+$/g, '').trim();
-    // A course can precede its section: "Data Structures of BSBA-5A".
-    if (!course && sectionMatch && date) {
-      course = withoutDate.slice(beforeDate.length, sectionMatch.index)
-        .replace(/\bLab\s+(?:Mid\s+)?Exam\b/ig, '')
-        .replace(/\s+of\s*$/i, '').replace(/^[\s,;:/-]+|[\s,;:/-]+$/g, '').trim();
-    }
-    return { course: course || shortCourse?.[1] || 'Extra class', section, instructor: instructor || 'N/A', isExtra: true, isReserved: true };
-  }
-  const commaParts = compact.split(',').map((part) => part.trim());
-  if (commaParts.length >= 4 && /^[A-Z]{2,}\d{3,}[A-Z]?$/i.test(commaParts[0])) {
-    const withoutCount = /^(?:\d+\s*st(?:udents?)?|\d+)$/i.test(commaParts.at(-1))
-      ? commaParts.slice(0, -1)
-      : commaParts;
-    return {
-      course: withoutCount.slice(2, -1).join(', ').trim(),
-      courseCode: withoutCount[0],
-      section: withoutCount[1] || 'N/A',
-      instructor: withoutCount.at(-1) || 'N/A',
-    };
-  }
   const parts = cellValue.split('\n');
+  if (parts.length < 4) return {};
   const course = (parts[0] || '').trim();
   const section = (parts[2] || 'N/A').trim();
   const instructor = (parts[3] || 'N/A').trim();
@@ -128,18 +150,19 @@ const fetchSheet = async (sheetUrl, sheetInfo) => {
         if (colIndex < 1) return;
 
         if (cell?.v && timeSlotHeaders[colIndex - 1]) {
-          const { course, courseCode, section, instructor, isExtra, isReserved } = parseCellValue(cell.v);
-          if (course) {
-            entries.push({
-              Course: course,
-              ...(courseCode ? { CourseCode: courseCode } : {}),
-              Section: section,
-              Instructor: instructor,
-              Room: room,
-              Day: day,
-              Time: timeSlotHeaders[colIndex - 1],
-              ...(isReserved ? { isExtra, isReserved } : {}),
-            });
+          for (const { course, courseCode, section, instructor, isExtra, isReserved, bookingText } of parseCellValues(cell.v)) {
+            if (course || isReserved) {
+              entries.push({
+                Course: course,
+                ...(courseCode ? { CourseCode: courseCode } : {}),
+                Section: section,
+                Instructor: instructor,
+                Room: room,
+                Day: day,
+                Time: timeSlotHeaders[colIndex - 1],
+                ...(isReserved ? { isExtra, isReserved, Booking: bookingText } : {}),
+              });
+            }
           }
         }
       });
@@ -282,11 +305,31 @@ export const buildTimetableFromMeta = async (metaJson) => {
   const officialCodes = new Map(regularCourses
     .filter((item) => item.CourseCode)
     .map((item) => [item.Course, item.CourseCode]));
-  allTimetableData = allTimetableData.map((item) => {
-    if (!item.isReserved) return item;
-    const course = namesByCode.get(item.Course) || item.Course;
-    return { ...item, Course: course,
-      ...(officialCodes.has(course) ? { CourseCode: officialCodes.get(course) } : {}) };
+  const courseReferences = new Map();
+  const addReference = (reference, course) => {
+    const key = courseReferenceKey(reference);
+    if (!key) return;
+    if (!courseReferences.has(key)) courseReferences.set(key, new Set());
+    courseReferences.get(key).add(course);
+  };
+  regularCourses.forEach((item) => addReference(item.Course, item.Course));
+  namesByCode.forEach((course, code) => addReference(code, course));
+  const roomBookings = [];
+  const knownClasses = new Set(regularCourses.map((item) => `${item.Course}|${item.Section}`));
+  allTimetableData = allTimetableData.flatMap((item) => {
+    if (!item.isReserved) return [item];
+    const candidates = courseReferences.get(courseReferenceKey(item.Course));
+    if (candidates?.size !== 1) {
+      roomBookings.push(item);
+      return [];
+    }
+    const [course] = candidates;
+    if (!knownClasses.has(`${course}|${item.Section}`)) {
+      roomBookings.push(item);
+      return [];
+    }
+    return [{ ...item, Course: course,
+      ...(officialCodes.has(course) ? { CourseCode: officialCodes.get(course) } : {}) }];
   });
 
   if (allTimetableData.length === 0) {
@@ -309,6 +352,7 @@ export const buildTimetableFromMeta = async (metaJson) => {
 
   return {
     timetable: allTimetableData,
+    roomBookings,
     allTimes: Array.from(allTimeSlots),
     rollNumbers: rollNumberEntries,
   };

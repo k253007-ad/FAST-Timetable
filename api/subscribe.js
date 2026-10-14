@@ -58,6 +58,7 @@ export default async function handler(req, res) {
     overrides = oldRecord?.overrides ?? [],
     extraClasses = oldRecord?.extraClasses ?? [],
     activities = oldRecord?.activities ?? [],
+    weeklyAttendance = oldRecord?.weeklyAttendance ?? null,
   } = body;
 
   // Preserve the existing notifiedState (dedup bookkeeping) across a
@@ -73,6 +74,7 @@ export default async function handler(req, res) {
     overrides,
     extraClasses,
     activities,
+    weeklyAttendance,
     notifiedState: existing?.notifiedState ?? oldRecord?.notifiedState ?? null,
   });
 

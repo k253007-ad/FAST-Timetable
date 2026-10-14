@@ -1286,25 +1286,26 @@ input.reschedule-select {
 .course-name-toggle {
   flex-shrink: 0;
   margin-left: 6px;
-  padding: 5px 9px;
-  border: 1px solid var(--border-strong);
+  padding: 10px 14px;
+  border: 1px solid #2563eb;
   border-radius: 7px;
-  background: var(--surface-2);
-  color: var(--text-2);
+  background: #2563eb;
+  color: #fff;
   font: inherit;
-  font-size: 12px;
-  font-weight: 650;
+  font-size: 14px;
+  font-weight: 700;
   cursor: pointer;
   white-space: nowrap;
 }
 
 .course-name-toggle:hover {
-  color: var(--accent-ink);
-  border-color: var(--accent);
+  color: #fff;
+  background: #1d4ed8;
+  border-color: #1d4ed8;
 }
 
 .course-name-toggle:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 3px solid #60a5fa;
   outline-offset: 2px;
 }
 
@@ -2892,3 +2893,7 @@ input.reschedule-select {
     margin: 10mm;
   }
 }
+
+.attendance-hint { display: block; font-size: .65rem; font-weight: 600; color: var(--accent); padding: 3px 6px; }
+.course-name-setting { margin-top: 10px; }
+.course-name-setting .course-name-toggle { width: 100%; margin-left: 0; min-height: 44px; }

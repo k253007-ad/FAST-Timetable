@@ -11,6 +11,7 @@
 // (local timer vs. push).
 
 import { abbreviateCourse, buildSchedule, cleanRoom, sessionKey } from '../../src/utils/schedule.js';
+import { getWeekKey } from '../../src/utils/weeklyChoices.js';
 
 // This runs on Vercel's servers (triggered by an external cron), not the
 // student's own device — so unlike the client hook (which reads the
@@ -89,8 +90,9 @@ export const computeNotifications = (data, subscriberSelection, prevState, now) 
   const { weekday: today, hours, minutes } = karachiParts(now);
   const state = prevState && prevState.lastDay === today ? { ...prevState } : freshState(today);
 
-  const { selectedClasses = [], overrides = [], extraClasses = [], activities = [] } = subscriberSelection;
-  const { processedSchedule } = buildSchedule(data, selectedClasses, overrides, extraClasses, activities);
+  const { selectedClasses = [], overrides = [], extraClasses = [], activities = [], weeklyAttendance } = subscriberSelection;
+  const attendanceChoices = weeklyAttendance?.week === getWeekKey(now) ? weeklyAttendance.choices || {} : {};
+  const { processedSchedule } = buildSchedule(data, selectedClasses, overrides, extraClasses, activities, attendanceChoices);
   const nowMinutes = hours * 60 + minutes;
   const sessions = (processedSchedule[today] || []).filter((cell) => !cell.isEmpty);
   const currentCell = sessions.find((cell) => nowMinutes >= cell.startMin && nowMinutes < cell.endMin);

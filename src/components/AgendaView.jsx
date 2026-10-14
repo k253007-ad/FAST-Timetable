@@ -1,5 +1,5 @@
 import { Fragment, useMemo, useState } from 'react';
-import { cleanRoom, DAY_ORDER } from '../utils/schedule.js';
+import { abbreviateCourse, cleanRoom, DAY_ORDER } from '../utils/schedule.js';
 import { DAY_LABELS, formatDuration, getWeekInsights, matchesAgendaQuery } from '../utils/agenda.js';
 import { IconSearch, IconClock, IconMapPin, IconUser, IconCheck } from './Icons.jsx';
 
@@ -53,7 +53,7 @@ export default function AgendaView({ schedule, courseColors, now }) {
                     {status && <span className={`agenda-live-status status-${status.toLowerCase()}`}>{status === 'Finished' && <IconCheck size={12} />}{status}{status === 'Next' ? ` · in ${formatDuration(cell.startMin - minute)}` : status === 'Now' ? ` · ${formatDuration(cell.endMin - minute)} left` : ''}</span>}
                     {cell.classes.length > 1 && <span className="agenda-clash">Overlapping classes</span>}
                     {cell.classes.map((item) => <div className="agenda-course" key={`${item.Course}|${item.Section}`} style={{ '--course-color': courseColors[item.Course] || 'var(--accent)' }}>
-                      <h4>{item.Course}</h4>
+                      <h4 title={item.Course}>{item.isActivity ? item.Course : abbreviateCourse(item.Course)}</h4>
                       <div className="agenda-meta">{item.isActivity ? <span>Personal activity</span> : <><span><IconMapPin size={13} />{cleanRoom(item.Room)}</span>{item.Section && item.Section !== 'N/A' && <span>Section {item.Section}</span>}{item.Instructor && item.Instructor !== 'N/A' && <span><IconUser size={13} />{item.Instructor}</span>}</>}{item.isExtra && <span>Extra class</span>}</div>
                     </div>)}
                   </div>

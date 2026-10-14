@@ -1,7 +1,8 @@
-import { useMemo } from 'react';
-import { DAY_ORDER, cleanRoom, formatSlot, sessionKey, toMinutes } from '../utils/schedule.js';
+import { useEffect, useMemo, useRef } from 'react';
+import { abbreviateCourse, DAY_ORDER, cleanRoom, formatSlot, getBuildingLabel, sessionKey, toMinutes } from '../utils/schedule.js';
 import { IconClock, IconMapPin, IconUser, IconAlert } from './Icons.jsx';
 import { withAlpha } from '../utils/courseColors.js';
+import { attendanceClassKey } from '../utils/weeklyChoices.js';
 
 // Today view, 2nd rework (2026-09-28): a calendar-style day view.
 // Top: Now / Next cards. Below: a time-scaled timeline where each
@@ -36,14 +37,34 @@ const fmtClock = (mins) => {
 };
 
 const buildingOf = (room) => {
-  const raw = ((room || '').match(/\b(?:AB|Academic Block)\s?(\d|I{1,3})\b/i) || [])[1];
-  if (!raw) return null;
-  return `AB${{ I: '1', II: '2', III: '3' }[raw.toUpperCase()] || raw}`;
+  const building = getBuildingLabel(room);
+  return building === 'Other' ? null : building;
 };
 
-const mainItem = (cell) => cell.classes.find((c) => !c.isActivity) || cell.classes[0];
+const mainItem = (cell) => cell.classes.find((c) => attendanceClassKey(c) === cell.attendanceChoice)
+  || cell.classes.find((c) => !c.isActivity) || cell.classes[0];
 
-export default function TodayView({ schedule, data, day, courseColors, now, onClassEnded, manualEndedKey }) {
+export default function TodayView({ schedule, data, day, courseColors, now, onClassEnded, manualEndedKey, shortCourseNames = false, onChooseAttendance }) {
+  const viewRef = useRef(null);
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    const fitNames = () => {
+      view.querySelectorAll('.tv2-course-name').forEach((name) => {
+        name.classList.remove('use-short-name');
+        const full = name.querySelector('.tv2-full-name');
+        const card = name.closest('.tv2-event');
+        if (full.scrollHeight > full.clientHeight + 1 || full.scrollWidth > full.clientWidth + 1 ||
+            card.scrollHeight > card.clientHeight + 1 || card.scrollWidth > card.clientWidth + 1) {
+          name.classList.add('use-short-name');
+        }
+      });
+    };
+    fitNames();
+    const observer = new ResizeObserver(fitNames);
+    view.querySelectorAll('.tv2-event').forEach((event) => observer.observe(event));
+    return () => observer.disconnect();
+  }, [schedule, day, shortCourseNames]);
   const live = karachi(now);
   const isToday = day === live.day;
   const minute = live.minutes;
@@ -51,7 +72,7 @@ export default function TodayView({ schedule, data, day, courseColors, now, onCl
 
   // Rooms busy per slot on this day — for "empty rooms during your break".
   const { allRooms, busyBySlot } = useMemo(() => {
-    const rows = data?.timetable || [];
+    const rows = [...(data?.timetable || []), ...(data?.roomBookings || [])];
     const busy = new Map();
     rows.forEach((r) => {
       if (r.Day !== day) return;
@@ -73,7 +94,7 @@ export default function TodayView({ schedule, data, day, courseColors, now, onCl
   };
 
 
-  const isEnded = (c) => sessionKey(c) === manualEndedKey;
+  const isEnded = (c) => sessionKey({ ...c, classes: [mainItem(c)] }) === manualEndedKey;
   const current = isToday ? cells.find((c) => minute >= c.startMin && minute < c.endMin && !isEnded(c)) : null;
   const next = isToday ? cells.find((c) => c.startMin > minute) : null;
   const doneCount = isToday ? cells.filter((c) => c.endMin <= minute).length : 0;
@@ -94,7 +115,7 @@ export default function TodayView({ schedule, data, day, courseColors, now, onCl
     if (current) {
       const it = mainItem(current);
       return {
-        tone: 'live', label: 'Now', title: it.Course,
+        tone: 'live', label: 'Now', title: it.isActivity || !shortCourseNames ? it.Course : abbreviateCourse(it.Course),
         meta: `${it.isActivity ? 'Activity' : cleanRoom(it.Room)} · ${fmtDuration(current.endMin - minute)} left`,
         progress: (minute - current.startMin) / (current.endMin - current.startMin),
       };
@@ -110,13 +131,13 @@ export default function TodayView({ schedule, data, day, courseColors, now, onCl
       const it = mainItem(target);
       return {
         label: isToday ? 'Next' : 'First class',
-        title: it.Course,
+        title: it.isActivity || !shortCourseNames ? it.Course : abbreviateCourse(it.Course),
         meta: `${target.startLabel} · ${it.isActivity ? 'Activity' : cleanRoom(it.Room)}`,
       };
     }
     if (nextDay && nextDay.day !== day) {
       const it = mainItem(nextDay.cell);
-      return { label: `Next · ${nextDay.day}`, title: it.Course, meta: `${nextDay.cell.startLabel} · ${it.isActivity ? 'Activity' : cleanRoom(it.Room)}` };
+      return { label: `Next · ${nextDay.day}`, title: it.isActivity || !shortCourseNames ? it.Course : abbreviateCourse(it.Course), meta: `${nextDay.cell.startLabel} · ${it.isActivity ? 'Activity' : cleanRoom(it.Room)}` };
     }
     return { label: 'Next', title: 'Nothing scheduled', meta: '' };
   })();
@@ -139,7 +160,7 @@ export default function TodayView({ schedule, data, day, courseColors, now, onCl
   );
 
   return (
-    <section className="card tv2 no-print" aria-label={`${day} day view`}>
+    <section ref={viewRef} className="card tv2 no-print" aria-label={`${day} day view`}>
       <header className="tv2-head">
         <h2>{isToday ? 'Today' : day}</h2>
         <span>{isToday ? live.dateLabel : 'Planned day'}</span>
@@ -193,17 +214,34 @@ export default function TodayView({ schedule, data, day, courseColors, now, onCl
               >
                 {cell.classes.map((item) => {
                   const color = courseColors[item.Course] || '#64748b';
+                  const selected = cell.attendanceChoice === attendanceClassKey(item);
+                  const chosen = cell.classes.some((candidate) => attendanceClassKey(candidate) === cell.attendanceChoice);
+                  const choose = () => onChooseAttendance?.(cell.clashChoiceKey, attendanceClassKey(item));
                   return (
                     <div
                       key={`${item.Course}|${item.Section}`}
-                      className="tv2-event"
-                      style={{ borderLeftColor: color, background: `linear-gradient(${withAlpha(color, 0.16)}, ${withAlpha(color, 0.16)}), var(--surface)` }}
+                      className={`tv2-event${selected ? ' is-attending' : chosen ? ' is-alternative' : ''}`}
+                      style={{ flex: chosen ? selected ? '3 1 0' : '1 1 0' : '1 1 0', borderLeftColor: color, background: `linear-gradient(${withAlpha(color, 0.16)}, ${withAlpha(color, 0.16)}), var(--surface)` }}
+                      role={cell.clashChoiceKey ? 'button' : undefined}
+                      tabIndex={cell.clashChoiceKey ? 0 : undefined}
+                      aria-pressed={cell.clashChoiceKey ? selected : undefined}
+                      aria-label={cell.clashChoiceKey ? `Attend ${item.Course} (${item.Section}) this week` : undefined}
+                      onClick={cell.clashChoiceKey ? choose : undefined}
+                      onKeyDown={cell.clashChoiceKey ? (event) => {
+                        if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); choose(); }
+                      } : undefined}
                     >
+                      {cell.clashChoiceKey && !selected && <span className="attendance-hint">Tap to attend</span>}
                       <div className="tv2-event-top">
                         <strong>
                           {isNow && <span className="tv2-flag now">Now</span>}
                           {isNext && <span className="tv2-flag next">Next</span>}
-                          {item.Course}
+                          {item.isActivity || shortCourseNames ? (item.isActivity ? item.Course : abbreviateCourse(item.Course)) : (
+                            <span className="tv2-course-name" title={item.Course}>
+                              <span className="tv2-full-name">{item.Course}</span>
+                              <span className="tv2-short-name">{abbreviateCourse(item.Course)}</span>
+                            </span>
+                          )}
                         </strong>
                         <span className="tv2-event-time">{cell.startLabel}–{cell.endLabel}</span>
                       </div>

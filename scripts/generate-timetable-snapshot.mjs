@@ -43,7 +43,7 @@ try {
   // App.jsx's getData() completes, same as it always has. `rollNumbers: []`
   // is kept in the shape (not omitted) so nothing downstream needs a
   // special case for "this field might not exist."
-  const snapshot = { timetable: data.timetable, allTimes: data.allTimes, rollNumbers: [] };
+  const snapshot = { timetable: data.timetable, roomBookings: data.roomBookings, allTimes: data.allTimes, rollNumbers: [] };
   await writeFile(outPath, JSON.stringify(snapshot));
   console.log(
     `Wrote ${outPath} (${snapshot.timetable.length} timetable rows, ` +

@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { buildSchedule, cleanRoom, sessionKey } from '../utils/schedule.js';
+import { abbreviateCourse, buildSchedule, cleanRoom, sessionKey } from '../utils/schedule.js';
 
 /**
  * "Now" / "Next" status card shown between the class selector and the grid.
@@ -8,6 +8,7 @@ import { buildSchedule, cleanRoom, sessionKey } from '../utils/schedule.js';
  * still looks across the whole week; this card is a same-day summary).
  */
 const NowNext = ({
+  shortCourseNames = false,
   data,
   selectedClasses,
   overrides,
@@ -63,7 +64,7 @@ const NowNext = ({
       return { course: item.Course, room: '', instructor: '', start: cell.startLabel, end: cell.endLabel };
     }
     return {
-      course: item.Section !== 'N/A' ? `${item.Course} (${item.Section})` : item.Course,
+      course: `${shortCourseNames ? abbreviateCourse(item.Course) : item.Course}${item.Section !== 'N/A' ? ` (${item.Section})` : ''}`,
       room: cleanRoom(item.Room),
       instructor: item.Instructor,
       start: cell.startLabel,

@@ -1,0 +1,79 @@
+/* Palette and spreadsheet layout from GreenTimetableMode's reference. */
+:root[data-pak-mode='true'] {
+  color-scheme: light;
+  --font: 'Arial', 'Segoe UI', sans-serif;
+  --accent: #397c23;
+  --accent-hover: #285b19;
+  --accent-ink: #24581b;
+  --accent-soft: #dbf0ce;
+  --accent-soft-strong: #b7e5a0;
+  --row-today: #dff2d4;
+  --bg: #dff0d4;
+  --surface: #f6fbf1;
+  --surface-2: #eaf5e2;
+  --surface-3: #d7ecc9;
+  --header-bg: #f0f8e9;
+  --text: #10240e;
+  --text-2: #3e5838;
+  --text-3: #53704b;
+  --border: #c2d9b3;
+  --border-strong: #9bbb86;
+  --danger: #b42318;
+  --danger-ink: #9a251b;
+  --danger-soft: #f5e9d7;
+  --success: #397c23;
+  --success-ink: #24581b;
+  --success-soft: #dbf0ce;
+  --success-soft-strong: #b7e5a0;
+  --shadow-sm: 0 1px 3px rgba(25, 65, 15, .08);
+  --shadow-md: 0 3px 12px rgba(25, 65, 15, .10);
+  --shadow-lg: 0 8px 24px rgba(25, 65, 15, .16);
+}
+:root[data-pak-mode='true'] body { background: var(--bg); color: var(--text); }
+:root[data-pak-mode='true'] .app-header { background: var(--header-bg); border-color: var(--border); }
+:root[data-pak-mode='true'] .card:not(.view-toggle-card) { border-color: var(--border); }
+:root[data-pak-mode='true'] .timetable-heading h1 { color: var(--text); }
+:root[data-pak-mode='true'] .signin-banner,
+:root[data-pak-mode='true'] .timetable-first .nownext-card { background: var(--surface); border-color: var(--border); }
+:root[data-pak-mode='true'] .schedule-warning { background: #f1f5d9; border-color: #bac99a; border-left-color: var(--accent); }
+:root[data-pak-mode='true'] .schedule-warning > svg:first-child { color: var(--accent); }
+:root[data-pak-mode='true'] .course-name-toggle { background: var(--accent); border-color: var(--accent); color: #fff; }
+:root[data-pak-mode='true'] .course-name-toggle:hover { background: var(--accent-hover); }
+:root[data-pak-mode='true'] .course-name-toggle:focus-visible { outline-color: var(--accent); }
+:root[data-pak-mode='true'] .brand svg stop:first-child { stop-color: #397c23; }
+:root[data-pak-mode='true'] .brand svg stop:last-child { stop-color: #14511e; }
+:root[data-pak-mode='true'] .brand svg circle { fill: #397c23; }
+.pak-timetable { border: 1px solid #a7c28f; border-radius: 12px; overflow: hidden; box-shadow: var(--shadow-md); }
+.pak-timetable-scroll { position: relative; width: 100%; aspect-ratio: 2200 / 1600; overflow: hidden; }
+.pak-grid { position: absolute; top: 0; left: 0; transform: scale(var(--pak-scale, 1)); transform-origin: top left; }
+.pak-grid { width: 2200px; min-width: 2200px; height: 1600px; table-layout: fixed; border-collapse: collapse; font-family: Arial, sans-serif; line-height: 1.15; color: #071505; background: #b7e5a0; text-align: center; font-weight: 700; }
+.pak-grid .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.pak-grid th, .pak-grid td { padding: 6px 12px; vertical-align: middle; }
+.pak-grid th:first-child { width: 264px; }
+.pak-grid thead th:first-child, .pak-detail-row > th { position: sticky; left: 0; z-index: 1; }
+.pak-grid .pak-slots { background: #397c23; color: #fff; font-size: 40px; }
+.pak-grid .pak-times { background: #91d56f; font-size: 32px; }
+.pak-grid .pak-day { background: #ddf1cd; font-size: 46px; letter-spacing: .5em; }
+.pak-grid .pak-day th { padding: 9px 8px 9px 18px; }
+.pak-day th span, .pak-grid tfoot span { display: inline-block; position: sticky; left: 16px; }
+.pak-detail-row > th { background: #91d56f; font-size: 46px; }
+.pak-grid .pak-class { background: #b7e5a0; font-size: calc(48px / var(--pak-class-count, 1)); }
+.pak-grid .pak-class-divider { border-left: 2px solid rgba(20, 81, 30, .55); }
+.pak-grid .pak-empty { background: #14511e; color: #e2f4d7; font-size: 46px; }
+.pak-grid td span { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pak-grid .pak-clash span + span { margin-top: 4px; padding-top: 4px; border-top: 1px dashed #397c23; }
+.pak-grid tfoot { background: #28571b; color: #fff; font-size: 42px; }
+.pak-grid tfoot td { padding: 9px; }
+.pak-grid .pak-extra { font-style: italic; }
+.exporting .pak-timetable { border: 0; border-radius: 0; box-shadow: none; }
+.exporting .pak-timetable-scroll { height: 1600px; aspect-ratio: auto; overflow: visible; }
+.exporting .pak-grid { position: static; transform: none; }
+.exporting .pak-grid thead th:first-child, .exporting .pak-detail-row > th,
+.exporting .pak-day th span, .exporting .pak-grid tfoot span { position: static; }
+.exporting .pak-extra { display: none; }
+@media print {
+  .pak-timetable { border-radius: 0; box-shadow: none; }
+  .pak-timetable-scroll { overflow: visible; }
+  .pak-grid { min-width: 0; print-color-adjust: exact; -webkit-print-color-adjust: exact; font-size: 10pt; }
+  .pak-grid .pak-extra { display: none; }
+}

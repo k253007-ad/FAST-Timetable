@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { DAY_ORDER, cleanRoom, formatSlot, getAllTimeSlots, toMinutes } from '../utils/schedule.js';
+import { DAY_ORDER, cleanRoom, formatSlot, getAllTimeSlots, getBuildingLabel, toMinutes } from '../utils/schedule.js';
 import { IconMapPin } from './Icons.jsx';
 
 // Karachi is a fixed UTC+5 (no DST) — same convention as the rest of the app.
@@ -28,9 +28,8 @@ const pickDefault = (slots, now) => {
 };
 
 const groupOf = (room) => {
-  const raw = (room.match(/\bAB\s?(\d|I{1,3})\b/i) || [])[1];
-  const block = raw && ({ I: '1', II: '2', III: '3' }[raw.toUpperCase()] || raw);
-  const building = block ? `Academic Block ${block}` : 'Other';
+  const label = getBuildingLabel(room);
+  const building = label === 'Other' ? label : `Academic Block ${label.slice(2)}`;
   return { building, isLab: /lab/i.test(room) };
 };
 
@@ -43,7 +42,7 @@ const FreeRooms = ({ data, now }) => {
   const [labsOnly, setLabsOnly] = useState(false);
 
   const { groups, total } = useMemo(() => {
-    const rows = data?.timetable || [];
+    const rows = [...(data?.timetable || []), ...(data?.roomBookings || [])];
     const all = new Set(rows.map((r) => r.Room).filter(Boolean));
     const busy = new Set(rows.filter((r) => r.Day === day && r.Time === slot).map((r) => r.Room));
     const free = [...all].filter((r) => !busy.has(r) && (!labsOnly || /lab/i.test(r)));

@@ -182,6 +182,22 @@
 .tv2-flag.now { background: var(--success-soft); color: var(--success-ink); }
 .tv2-flag.next { background: var(--accent-soft); color: var(--accent-ink); }
 
+.tv2-event[role="button"] { cursor: pointer; transition: flex-grow 180ms ease, opacity 180ms ease; }
+.tv2-event[role="button"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.tv2-block.is-clash .tv2-event.is-attending { box-shadow: inset 0 0 0 2px var(--accent); }
+.tv2-event.is-alternative { opacity: .65; padding: 6px; }
+.tv2-event.is-alternative .tv2-event-top strong { font-size: 10px; }
+.tv2-event.is-alternative .tv2-event-time, .tv2-event.is-alternative .tv2-event-meta { display: none; }
+.tv2-block.is-clash .tv2-event-top { flex-wrap: wrap; gap: 2px 8px; }
+.tv2-block.is-clash .tv2-event-top strong { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.tv2-event .attendance-hint { padding: 0; font-size: 9px; }
+.tv2-course-name { display: block; }
+.tv2-full-name { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.tv2-short-name { display: none; }
+.tv2-course-name.use-short-name .tv2-full-name { display: none; }
+.tv2-course-name.use-short-name .tv2-short-name { display: block; }
+@media (prefers-reduced-motion: reduce) { .tv2-event[role="button"] { transition: none; } }
+
 /* Header subtitle: keep "Karachi Campus" visible on phones too */
 .brand-sub { display: block !important; }
 

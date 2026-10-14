@@ -6,6 +6,8 @@
 
 // Exported again as of the manual-reschedule feature — ClassSelector needs
 // the weekday list for its "move to..." day picker.
+import { attendanceClassKey, clashChoiceKey } from './weeklyChoices.js';
+
 export const DAY_ORDER = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
 
 // Personal, non-course blocks a student can add to their own timetable (see
@@ -31,8 +33,9 @@ export const formatSlot = (slot) => {
 
 export const cleanRoom = (room) =>
   (room || 'N/A')
+    .replace(/^Academic Block\s+(III|II|IV|I|V)\b/gi, (_, numeral) => `AB${ROMAN_BUILDING[numeral.toUpperCase()]}`)
     .replace(/Academic Block/gi, 'AB')
-    .replace(/\bRoom\s*/gi, '') // drop the word "Room" — redundant, and eats space on mobile
+    .replace(/\s*Room\s*/gi, ' - ') // separate the academic block from the classroom
     .replace(/\s*\(\d+\)\s*$/, '') // strip trailing seating capacity, e.g. "(50)"
     .trim();
 
@@ -42,9 +45,10 @@ const ROMAN_BUILDING = { I: '1', II: '2', III: '3', IV: '4', V: '5' };
 // handful of lab venues in the sheet spell the building out with a roman
 // numeral instead of the usual "AB<n>" short form) — anything that matches
 // neither falls into a synthetic "Other" bucket rather than being dropped.
-const getBuildingLabel = (room) => {
-  const short = room.match(/^AB\s*(\d+)/i);
-  if (short) return `AB${short[1]}`;
+export const getBuildingLabel = (room) => {
+  room = (room || '').trim();
+  const short = room.match(/^AB\s*(\d+|III|II|IV|I|V)/i);
+  if (short) return `AB${ROMAN_BUILDING[short[1].toUpperCase()] || short[1]}`;
   const spelled = room.match(/^Academic Block\s+(I{1,3}|IV|V)\b/i);
   if (spelled) return `AB${ROMAN_BUILDING[spelled[1].toUpperCase()] || spelled[1]}`;
   return 'Other';
@@ -85,7 +89,7 @@ export const getRoomOptions = (data) => {
     }
 
     const suffix = raw
-      .replace(/^AB\s*\d+/i, '')
+      .replace(/^AB\s*(\d+|III|II|IV|I|V)/i, '')
       .replace(/^Academic Block\s+(I{1,3}|IV|V)\b/i, '')
       .replace(/room/i, '')
       .trim();
@@ -174,14 +178,16 @@ const ABBR_STOPWORDS = new Set([
 
 // "Applied Physics" -> "AP", "Object Oriented Programming" -> "OOP" — used by
 // notifications, which need a course label short enough to fit a native
-// notification's title bar. Strips a trailing "- Lab" first.
+// notification's title bar. Labs retain a "-Lab" suffix for clarity.
 export const abbreviateCourse = (name) => {
   if (!name) return '';
   const base = name.replace(/\s*-\s*Lab\s*$/i, '').trim();
-  const words = base.split(/\s+/).filter((w) => w && !ABBR_STOPWORDS.has(w.toLowerCase()));
-  if (words.length === 0) return base.slice(0, 3).toUpperCase();
-  if (words.length === 1) return words[0].slice(0, 3).toUpperCase();
-  return words.map((w) => w[0].toUpperCase()).join('');
+  const words = base.split(/[\s-]+/).map((w) => w.replace(/[^A-Za-z0-9]/g, ''))
+    .filter((w) => w && !ABBR_STOPWORDS.has(w.toLowerCase()));
+  const code = words.length === 0 ? base.slice(0, 3).toUpperCase()
+    : words.length === 1 ? words[0].slice(0, 3).toUpperCase()
+      : words.map((w) => w[0].toUpperCase()).join('');
+  return /\s*-\s*Lab\s*$/i.test(name) ? `${code}-Lab` : code;
 };
 
 /**
@@ -576,7 +582,7 @@ export const getOccupiedSlots = (data, selectedClasses, overrides) => {
  * print/export-only — see .grid-toolbar — and should describe what the
  * printed grid shows).
  */
-export const buildSchedule = (data, selectedClasses, overrides = [], extraClasses = [], activities = []) => {
+export const buildSchedule = (data, selectedClasses, overrides = [], extraClasses = [], activities = [], attendanceChoices = {}) => {
   if (!data?.timetable) {
     return {
       days: [],
@@ -594,7 +600,7 @@ export const buildSchedule = (data, selectedClasses, overrides = [], extraClasse
 
   const timeSlots = getAllTimeSlots(data);
 
-  const filteredData = [
+  let filteredData = [
     ...applyOverrides(
       data.timetable
         .filter((item) => selectedClasses.includes(`${item.Course} - ${item.Section}`))
@@ -606,6 +612,24 @@ export const buildSchedule = (data, selectedClasses, overrides = [], extraClasse
     ...buildExtraRows(data, extraClasses),
     ...buildActivityRows(activities),
   ];
+
+  if (Object.keys(attendanceChoices).length) {
+    const original = buildSchedule(data, selectedClasses, overrides, extraClasses, activities);
+    const skipped = [];
+    Object.entries(original.processedSchedule).forEach(([day, cells]) => {
+      cells.filter((cell) => cell.classes.length > 1).forEach((cell) => {
+        const selected = attendanceChoices[clashChoiceKey(day, cell)];
+        if (!cell.classes.some((item) => attendanceClassKey(item) === selected)) return;
+        skipped.push({ day, start: cell.startMin, end: cell.endMin,
+          classes: new Set(cell.classes.map(attendanceClassKey).filter((key) => key !== selected)) });
+      });
+    });
+    filteredData = filteredData.filter((item) => !skipped.some((skip) =>
+      skip.day === item.Day && skip.classes.has(attendanceClassKey(item)) &&
+      toMinutes(formatSlot(item.Time).start) >= skip.start &&
+      toMinutes(formatSlot(item.Time).start) < skip.end
+    ));
+  }
 
   const schedule = {};
   days.forEach((day) => {
@@ -654,9 +678,11 @@ export const buildSchedule = (data, selectedClasses, overrides = [], extraClasse
           }
           cellClasses = merged;
         } else {
+          const currentSet = dedupeByCourseSection(classesInSlot);
           for (let j = i + 1; j < timeSlots.length; j++) {
             const nextClasses = schedule[day][timeSlots[j]];
-            if (nextClasses.length > 0 && sameClass(nextClasses[0], classItem)) {
+            const nextSet = dedupeByCourseSection(nextClasses);
+            if (nextSet.length === currentSet.length && currentSet.every((current) => nextSet.some((next) => sameClass(current, next)))) {
               colSpan++;
             } else {
               break;

@@ -4,7 +4,6 @@ import { splitClassValue, formatClassLabel, getActivityColor, withAlpha } from '
 import {
   ACTIVITY_TYPES,
   abbreviateCourse,
-  buildCourseCodeMap,
   buildMoveOverrides,
   cleanRoom,
   DAY_ORDER,
@@ -684,6 +683,8 @@ const RescheduleEditScreen = ({ occurrence, timeSlots, activeOverride, roomOptio
  * `onSwitchProfile` — each profile's selection is a separate saved list.
  */
 const ClassSelector = ({
+  shortCourseNames = false,
+  setShortCourseNames,
   data,
   allClasses,
   selectedClasses,
@@ -702,7 +703,6 @@ const ClassSelector = ({
   const [confirmAction, setConfirmAction] = useState(null); // 'clear' | 'resync' | null
   const [mode, setMode] = useState('rollno'); // 'rollno' | 'teacher' | 'section' — see the doc comment above re: 'manual'
   const [query, setQuery] = useState('');
-  const [shortCourseNames, setShortCourseNames] = useState(false);
   const [groupQuery, setGroupQuery] = useState(''); // shared search box for roll no / teacher tabs
   const [sectionCourse, setSectionCourse] = useState('');
   const [sectionSemester, setSectionSemester] = useState('');
@@ -782,18 +782,10 @@ const ClassSelector = ({
     };
   }, [open]);
 
-  const courseCodes = useMemo(() => {
-    const byCourse = new Map();
-    buildCourseCodeMap(data?.timetable || []).forEach((course, code) => byCourse.set(course, code));
-    (data?.timetable || []).forEach((item) => {
-      if (item.CourseCode) byCourse.set(item.Course, item.CourseCode);
-    });
-    return byCourse;
-  }, [data?.timetable]);
   const displayCourse = useCallback((course) => {
     if (!shortCourseNames) return course;
-    return courseCodes.get(course) || abbreviateCourse(course);
-  }, [courseCodes, shortCourseNames]);
+    return abbreviateCourse(course);
+  }, [shortCourseNames]);
   const displayClass = (value) => {
     const { course, section } = splitClassValue(value);
     return section ? `${displayCourse(course)} (${section})` : displayCourse(course);
@@ -810,16 +802,16 @@ const ClassSelector = ({
     </button>
   );
 
-  // Search only the names currently shown in the picker, plus sections.
+  // Search full names, abbreviations, and sections in either display mode.
   const filtered = useMemo(() => {
     const tokens = query.toLowerCase().split(/\s+/).filter(Boolean);
     if (tokens.length === 0) return allClasses;
     return allClasses.filter((value) => {
       const { course, section } = splitClassValue(value);
-      const haystack = `${displayCourse(course)} ${section}`.toLowerCase();
+      const haystack = `${course} ${abbreviateCourse(course)} ${section}`.toLowerCase();
       return tokens.every((t) => haystack.includes(t));
     });
-  }, [allClasses, displayCourse, query]);
+  }, [allClasses, query]);
 
   // A stable callback (reads the toggled value off the event instead of
   // closing over it per-row) so every row can share one function reference —
@@ -1628,6 +1620,7 @@ const ClassSelector = ({
           </button>
         </div>
       )}
+      <div className="course-name-setting">{courseNameToggle}</div>
 
       {showChips && (
         <Modal title="Select courses" titleAction={courseNameToggle} onClose={() => setShowChips(false)}>

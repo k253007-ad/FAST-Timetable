@@ -4,8 +4,10 @@ import { getWeekInsights, formatDuration } from './utils/agenda.js';
 import OtherTimetables from './components/OtherTimetables.jsx';
 import FreeRooms from './components/FreeRooms.jsx';
 import TodayView from './components/TodayView.jsx';
+import { WEEKLY_CHOICES_KEY, clashChoiceKey, getWeekKey, readWeeklyChoices, getWeeklyChoices } from './utils/weeklyChoices.js';
 import ScheduleOverview from './components/ScheduleOverview.jsx';
 import TimetableGrid from './components/TimetableGrid.jsx';
+import GreenTimetable from './components/GreenTimetable.jsx';
 import ClassSelector, { Modal } from './components/ClassSelector.jsx';
 import NowNext from './components/NowNext.jsx';
 import { fetchData } from './services/dataService.js';
@@ -97,6 +99,9 @@ const TIMETABLE_CACHE_KEY = 'cachedTimetableData';
 const getCachedTimetableSnapshot = () => {
   try {
     const saved = JSON.parse(localStorage.getItem(TIMETABLE_CACHE_KEY) || 'null');
+    // Older parsers stored reservation fragments as course names. Reload
+    // those snapshots through the current parser before showing the picker.
+    if (saved?.data?.timetable?.some((item) => item.isReserved && !item.Booking)) return null;
     // Shape-checked, not just truthy — this bypasses the loading skeleton
     // entirely (see `status`'s initializer below), so a malformed or
     // schema-drifted cache entry (e.g. saved by a future/past app version
@@ -494,6 +499,16 @@ function App() {
     return cached ? new Date(cached.at) : null;
   });
   const [now, setNow] = useState(() => Date.now());
+  const [shortCourseNames, setShortCourseNames] = useState(() => {
+    try { return localStorage.getItem('shortCourseNames') === 'true'; } catch { return false; }
+  });
+  const [weeklyChoices, setWeeklyChoices] = useState(readWeeklyChoices);
+  useEffect(() => {
+    try { localStorage.setItem('shortCourseNames', String(shortCourseNames)); } catch { /* Storage unavailable. */ }
+  }, [shortCourseNames]);
+  useEffect(() => {
+    try { localStorage.setItem(WEEKLY_CHOICES_KEY, JSON.stringify(weeklyChoices)); } catch { /* Storage unavailable. */ }
+  }, [weeklyChoices]);
   const [exporting, setExporting] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -504,6 +519,10 @@ function App() {
   const [profileRevision, setProfileRevision] = useState(0);
   const [profileNames, setProfileNames] = useState(getSavedProfileNames);
   const [theme, setTheme] = useState(getInitialTheme);
+  const [pakMode, setPakMode] = useState(() => {
+    try { return localStorage.getItem('pakMode') === 'true'; } catch { return false; }
+  });
+  const pakModePresses = useRef(0);
   const [activeProfile, setActiveProfile] = useState(getSavedActiveProfile);
   const [selectedClasses, setSelectedClasses] = useState(() =>
     getSavedClasses(getSavedActiveProfile())
@@ -1055,15 +1074,17 @@ function App() {
   // Apply + persist theme.
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
+    document.documentElement.dataset.pakMode = String(pakMode);
     try {
       localStorage.setItem('theme', theme);
+      localStorage.setItem('pakMode', String(pakMode));
     } catch {
       /* storage unavailable */
     }
     document
       .querySelector('meta[name="theme-color"]')
-      ?.setAttribute('content', theme === 'dark' ? '#10131a' : '#ffffff');
-  }, [theme]);
+      ?.setAttribute('content', pakMode ? '#397c23' : theme === 'dark' ? '#10131a' : '#ffffff');
+  }, [theme, pakMode]);
 
   const getData = useCallback(async () => {
     if (hasDataRef.current) {
@@ -1292,14 +1313,16 @@ function App() {
 
         const { default: html2canvas } = await import('html2canvas');
         const canvas = await html2canvas(element, {
-          scale: 2,
+          scale: pakMode ? 1 : 2,
+          ...(pakMode ? { width: 2200, height: 1600 } : {}),
           backgroundColor: surface || '#ffffff',
-          windowWidth: 1560,
+          windowWidth: pakMode ? 2200 : 1560,
           onclone: (clonedDoc) => {
             const target = clonedDoc.querySelector('[data-capture]');
             if (target) {
               target.classList.add('exporting');
-              target.style.width = '1480px';
+              target.style.width = pakMode ? '2200px' : '1480px';
+              if (pakMode) target.style.height = '1600px';
             }
           },
         });
@@ -1316,7 +1339,7 @@ function App() {
         setExporting(false);
       }
     },
-    [exporting]
+    [exporting, pakMode]
   );
 
   const canExport = status === 'ready' && selectedClasses.length > 0 && !exporting;
@@ -1511,10 +1534,31 @@ function App() {
     }
   }, []);
 
-  const overviewSchedule = useMemo(
+  const originalSchedule = useMemo(
     () => buildSchedule(timetableData, selectedClasses, overrides, extraClasses, activities),
     [timetableData, selectedClasses, overrides, extraClasses, activities]
   );
+  const week = getWeekKey(now);
+  const attendanceChoices = useMemo(() => getWeeklyChoices(activeProfile, now, weeklyChoices),
+    [activeProfile, now, weeklyChoices]);
+  const displayedSchedule = useMemo(() => ({
+    ...originalSchedule,
+    processedSchedule: Object.fromEntries(Object.entries(originalSchedule.processedSchedule).map(([day, cells]) =>
+      [day, cells.map((cell) => cell.classes.length > 1 ? {
+        ...cell,
+        clashChoiceKey: clashChoiceKey(day, cell),
+        attendanceChoice: attendanceChoices[clashChoiceKey(day, cell)],
+      } : cell)])),
+  }), [originalSchedule, attendanceChoices]);
+  const overviewSchedule = useMemo(() => {
+    return buildSchedule(timetableData, selectedClasses, overrides, extraClasses, activities, attendanceChoices);
+  }, [timetableData, selectedClasses, overrides, extraClasses, activities, attendanceChoices]);
+  const chooseAttendance = (key, value) => setWeeklyChoices((saved) => {
+    const choices = { ...getWeeklyChoices(activeProfile, now, saved) };
+    if (value) choices[key] = value;
+    else delete choices[key];
+    return { ...saved, [activeProfile]: { week, choices } };
+  });
   const weekInsights = useMemo(() => getWeekInsights(overviewSchedule), [overviewSchedule]);
   const openSchedule = (view, day) => {
     setGridView(view);
@@ -1665,12 +1709,33 @@ function App() {
                     role="menuitem"
                     className="menu-item"
                     onClick={() => {
+                      setPakMode(false);
                       setTheme((t) => (t === 'dark' ? 'light' : 'dark'));
                       setSettingsOpen(false);
                     }}
                   >
                     {theme === 'dark' ? <IconSun size={16} /> : <IconMoon size={16} />}
                     <span>{theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}</span>
+                  </button>
+
+                  <button type="button" role="menuitem" className="menu-item"
+                    onClick={() => {
+                      if (pakMode) {
+                        setPakMode(false);
+                        pakModePresses.current = 0;
+                        setSettingsOpen(false);
+                        return;
+                      }
+                      pakModePresses.current += 1;
+                      if (pakModePresses.current === 3) {
+                        pakModePresses.current = 0;
+                        setPakMode(true);
+                        setGridView('week');
+                        setSettingsOpen(false);
+                      }
+                    }}>
+                    <IconMoon size={16} />
+                    <span>Pak-mode{pakMode && <small>Return to standard theme</small>}</span>
                   </button>
 
                   <div className="menu-divider" role="separator" />
@@ -1893,6 +1958,8 @@ function App() {
             </div>
             <div id="class-management" hidden={!classesOpen}>
             <ClassSelector
+              shortCourseNames={shortCourseNames}
+              setShortCourseNames={setShortCourseNames}
               data={timetableData}
               allClasses={allClasses}
               selectedClasses={selectedClasses}
@@ -1911,6 +1978,7 @@ function App() {
             </div>
 
             {gridView === 'week' && <NowNext
+              shortCourseNames={shortCourseNames}
               schedule={overviewSchedule}
               data={timetableData}
               selectedClasses={selectedClasses}
@@ -1969,11 +2037,12 @@ function App() {
             </section>
 
             {gridView === 'rooms' && <FreeRooms data={timetableData} now={now} />}
-            {gridView === 'day' && <TodayView schedule={overviewSchedule} data={timetableData} day={gridDay} courseColors={courseColors} now={now} onClassEnded={activeProfile === 'main' ? notif.markCurrentEnded : undefined} manualEndedKey={activeProfile === 'main' ? notif.manualEndedKey : null} />}
+            {gridView === 'day' && <TodayView onChooseAttendance={chooseAttendance} shortCourseNames={shortCourseNames} schedule={displayedSchedule} data={timetableData} day={gridDay} courseColors={courseColors} now={now} onClassEnded={activeProfile === 'main' ? notif.markCurrentEnded : undefined} manualEndedKey={activeProfile === 'main' ? notif.manualEndedKey : null} />}
 
             <div ref={captureRef} data-capture className={`capture-area${gridView !== 'week' ? ' agenda-grid-capture' : ''}`}>
-              <TimetableGrid
-                schedule={overviewSchedule}
+              {pakMode ? <GreenTimetable schedule={displayedSchedule} now={now} /> : <TimetableGrid
+                shortCourseNames={shortCourseNames}
+                schedule={displayedSchedule}
                 data={timetableData}
                 selectedClasses={selectedClasses}
                 overrides={overrides}
@@ -1983,7 +2052,7 @@ function App() {
                 isDark={theme === 'dark'}
                 viewMode="week"
                 selectedDay={gridDay}
-              />
+              />}
             </div>
             {insightsOpen && <Modal title="Weekly report" onClose={() => setInsightsOpen(false)}>
               <div className="insight-context"><span>{activeProfile === 'main' ? 'My timetable' : profileNames[activeProfile] || 'Other timetable'}</span><span>{lastUpdated ? `Data updated ${timeAgo(lastUpdated, now)}` : 'Waiting for timetable data'}</span></div>
